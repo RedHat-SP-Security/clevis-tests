@@ -95,7 +95,7 @@ rlJournalStart
     rlPhaseEnd
 
     rlPhaseStart FAIL "clevis encrypt using first server, decrypt using second"
-        rlRun "wget -nv -O adv.json \"http://localhost:$port/adv\""
+        rlRun "curl -sS -o adv.json \"http://localhost:$port/adv\""
         echo -n "testing data string" > plain
         rlRun "clevis encrypt tang '{ \"url\": \"http://localhost:$port\", \"adv\": \"adv.json\" }' < plain > enc"
         grep_b64 "http:" enc

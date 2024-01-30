@@ -60,7 +60,7 @@ rlJournalStart
 
         rlRun "rlServiceStart tangd.socket"
         rlRun "sleep 1"
-        rlRun "wget -nv -O adv.json \"http://localhost/adv\"" 0 "Get advertisement from tang server"
+        rlRun "curl -sS -o adv.json \"http://localhost/adv\"" 0 "Get advertisement from tang server"
 
         rlRun "dd if=/dev/zero of=loopfile bs=100M count=1" 0 "Create dummy file for device"
         rlRun "lodev=$(losetup -f --show loopfile)" 0 "Create device"

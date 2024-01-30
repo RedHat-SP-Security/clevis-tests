@@ -3,7 +3,7 @@ test: ./runtest.sh
 recommend:
   - clevis-luks
   - tang
-  - wget
+  - curl
 duration: 5m
 enabled: true
 tag:

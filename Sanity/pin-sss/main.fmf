@@ -10,7 +10,7 @@ recommend:
   - socat
   - expect
   - psmisc
-  - wget
+  - curl
 duration: 5m
 enabled: true
 tag:
