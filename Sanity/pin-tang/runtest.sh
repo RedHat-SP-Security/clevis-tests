@@ -122,7 +122,7 @@ CLEVIS_END
     rlPhaseEnd
 
     rlPhaseStart FAIL "clevis encrypt, using existing adv"
-        rlRun "wget -nv -O adv.json \"http://localhost:$port/adv\""
+        rlRun "curl -sS -o adv.json \"http://localhost:$port/adv\""
         stop_tang "$port"
         echo -n "testing data string" > plain
         rlRun "clevis encrypt tang '{ \"url\": \"http://localhost:8123\", \"adv\": \"adv.json\" }' < plain > enc"

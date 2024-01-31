@@ -41,7 +41,7 @@ rlJournalStart
 
         rlRun "rlServiceStart tangd.socket"
         rlRun "sleep 1"
-        rlRun "wget -nv -O adv.json \"http://localhost/adv\"" 0 "Get advertisement from tang server"
+        rlRun "curl -sS -o adv.json \"http://localhost/adv\"" 0 "Get advertisement from tang server"
 
         echo "testing data string" > plainFile
     rlPhaseEnd

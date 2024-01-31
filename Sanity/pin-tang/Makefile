@@ -54,7 +54,7 @@ $(METADATA): Makefile
 	@echo "Type:            Sanity" >> $(METADATA)
 	@echo "TestTime:        5m" >> $(METADATA)
 	@echo "RunFor:          clevis tang jose luksmeta" >> $(METADATA)
-	@echo "Requires:        clevis tang socat expect psmisc wget" >> $(METADATA)
+	@echo "Requires:        clevis tang socat expect psmisc curl" >> $(METADATA)
 	@echo "Priority:        Normal" >> $(METADATA)
 	@echo "License:         GPLv2" >> $(METADATA)
 	@echo "Confidential:    no" >> $(METADATA)

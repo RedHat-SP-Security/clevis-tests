@@ -21,6 +21,7 @@ recommend:
   - clevis-luks
   - tang
   - keyutils
+  - curl
 duration: 5m
 extra-nitrate: TC#0614663
 extra-summary: /CoreOS/clevis/Sanity/kernel-keyring-support

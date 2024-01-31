@@ -111,8 +111,8 @@ rlJournalStart
     if [ $(rpm -q --queryformat '%{VERSION}' clevis) -ge 15 ]; then
         # Tests feature added in clevis-15.1 for RHEL-8.4
         rlPhaseStart FAIL "Valid sss config with wrong tang config"
-            rlRun "wget -nv -O adv1.json \"http://localhost:$port1/adv\""
-            rlRun "wget -nv -O adv2.json \"http://localhost:$port2/adv\""
+            rlRun "curl -sS -o adv1.json \"http://localhost:$port1/adv\""
+            rlRun "curl -sS -o adv2.json \"http://localhost:$port2/adv\""
             echo -n "testing data string" > plain
             rlRun "clevis encrypt sss '{
                     \"t\": 2,
@@ -128,9 +128,9 @@ rlJournalStart
     fi
 
     rlPhaseStart FAIL "clevis setup, encrypt using t=2 and 3 servers"
-        rlRun "wget -nv -O adv1.json \"http://localhost:$port1/adv\""
-        rlRun "wget -nv -O adv2.json \"http://localhost:$port2/adv\""
-        rlRun "wget -nv -O adv3.json \"http://localhost:$port3/adv\""
+        rlRun "curl -sS -o adv1.json \"http://localhost:$port1/adv\""
+        rlRun "curl -sS -o adv2.json \"http://localhost:$port2/adv\""
+        rlRun "curl -sS -o adv3.json \"http://localhost:$port3/adv\""
         echo -n "testing data string" > plain
         rlRun "clevis encrypt sss '{
                 \"t\": 2,

@@ -7,7 +7,7 @@ recommend:
   - tang
   - jose
   - cryptsetup
-  - wget
+  - curl
 duration: 5m
 enabled: true
 tag:

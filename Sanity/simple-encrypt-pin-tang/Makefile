@@ -53,7 +53,7 @@ $(METADATA): Makefile
 	@echo "Type:            Sanity" >> $(METADATA)
 	@echo "TestTime:        5m" >> $(METADATA)
 	@echo "RunFor:          clevis" >> $(METADATA)
-	@echo "Requires:        clevis tang wget" >> $(METADATA)
+	@echo "Requires:        clevis tang curl" >> $(METADATA)
 	@echo "Priority:        Normal" >> $(METADATA)
 	@echo "License:         GPLv2+" >> $(METADATA)
 	@echo "Confidential:    no" >> $(METADATA)

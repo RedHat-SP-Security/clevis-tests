@@ -69,7 +69,7 @@ rlJournalStart
 
     rlPhaseStartTest "clevis luks bind"
         rlRun "luksmeta show -d ${lodev} -s 1" "1-100" "Check if there is no luksmeta data in slot 1"
-        rlRun "wget -nv -O adv.json \"http://localhost/adv\"" 0 "Get advertisement from tang server"
+        rlRun "curl -sS -o adv.json \"http://localhost/adv\"" 0 "Get advertisement from tang server"
 
         rlRun  "echo -n redhat123 | clevis luks bind -f -k - -d ${lodev} tang '{ \"url\": \"http://localhost\", \"adv\": \"adv.json\" }'" 0 "clevis luks bind"
 
