@@ -11,7 +11,7 @@ recommend:
   - sed
   - util-linux
 duration: 2h
-enabled: true
+enabled: false
 tag:
   - NoRHEL4
   - NoRHEL5
