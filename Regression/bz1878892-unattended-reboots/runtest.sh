@@ -75,7 +75,7 @@ install_virt() {
             rlRun "dnf -y install virt-install" || return 1
             rlRun "dnf -y module install virt" || return 1
             return 0
-        elif rlIsRHEL '9'; then
+        elif rlIsRHEL '>=9'; then
             rlRun "dnf -y install qemu-kvm libvirt virt-install" || return 1
             return 0
         fi
