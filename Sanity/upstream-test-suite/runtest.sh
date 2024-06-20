@@ -65,7 +65,7 @@ rlJournalStart
             rlRun "mkdir build"
             rlRun "pushd build"
                 rlRun "meson .."
-                rlRun "meson test" 0 "Running upstream test suite"
+                rlRun "meson test -v" 0 "Running upstream test suite"
             rlRun "popd"
         rlRun "popd"
     rlPhaseEnd
