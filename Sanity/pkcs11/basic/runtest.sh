@@ -8,7 +8,11 @@
 #
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 #
+<<<<<<< HEAD
 #   Copyright (c) 2024 Red Hat, Inc.
+=======
+#   Copyright (c) 2017 Red Hat, Inc.
+>>>>>>> fc6f538 (Initial basic test cases for the Clevis PKCS11 functionality)
 #
 #   This copyrighted material is made available to anyone wishing
 #   to use, modify, copy, or redistribute it subject to the terms
