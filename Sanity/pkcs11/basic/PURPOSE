@@ -1,0 +1,3 @@
+PURPOSE of /CoreOS/clevis/Sanity/pkcs11/basic
+Description: tests the basic pkcs#11 functionality of clevis
+Author: Martin Litwora <mlitwora@redhat.com>
