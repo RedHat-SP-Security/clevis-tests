@@ -1,0 +1,43 @@
+summary: tests the pkcs#11 tpm2 functionality of clevis
+component:
+  - clevis
+test: ./runtest.sh
+recommend:
+  - clevis
+  - tang
+  - curl
+  - softhsm
+  - opensc
+  - jose
+duration: 10m
+enabled: true
+tag:
+  - CI-Tier-1
+  - NoRHEL4
+  - NoRHEL5
+  - NoRHEL6
+  - TIPfail_Security
+  - Tier1
+  - Tier1security
+  - TierCandidatesFAIL
+tier: '1'
+extra-summary: /CoreOS/clevis/Sanity/pkcs11-tpm2
+extra-task: /CoreOS/clevis/Sanity/pkcs11-tpm2
+#extra-nitrate: TC#0XXXXX
+adjust:
+  - enabled: false
+    when: distro < rhel-7
+    continue: false
+  - enabled: false
+    when: distro ~< rhel-7.6
+    continue: false
+  - enabled: false
+    when: distro == rhel-alt-7
+    continue: false
+  - enabled: false
+    when: arch != x86_64
+    continue: false
+  - when: hwtpm is not defined or hwtpm == false
+    enabled: false
+    because: This tests works only with HWTPM emulator
+extra-hardware: hostrequire = <and><pool op="=" value="tpm-pbd-machines"/><system_type value="Resource"/></and>
