@@ -126,7 +126,7 @@ rlJournalStart
         rlAssertDiffer JWE plain_text
 
         rlRun "softhsm2-util --delete-token --token $TOKEN_LABEL" 0 "Delete the token to simulate card removal"
-        rlRun -l "clevis decrypt pkcs11 < JWE" 1 "It is expected to fail the decryption as the card token was deleted"
+        rlRun -l "clevis decrypt pkcs11 < JWE" 1 "It is expected to fail the decryption as the token card was deleted"
         rlRun "rm plain_text JWE"
     rlPhaseEnd
 

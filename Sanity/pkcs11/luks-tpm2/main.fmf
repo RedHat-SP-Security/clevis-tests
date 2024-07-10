@@ -1,4 +1,4 @@
-summary: tests the basic pkcs#11 luks functionality of clevis
+summary: tests the basic pkcs#11 luks and tpm2 functionality of clevis
 component:
   - clevis
 test: ./runtest.sh
@@ -11,7 +11,7 @@ recommend:
   - openssl
   - a2x
   - git
-duration: 10m
+duration: 20m
 enabled: true
 tag:
   - NoRHEL4
