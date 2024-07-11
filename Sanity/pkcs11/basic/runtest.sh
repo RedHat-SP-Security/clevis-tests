@@ -48,7 +48,18 @@ install_softhsm() {
 
 development_clevis() {
     # TODO: remove once the development is done
+    rlIsRHEL 9
+    if [ $? -eq 0 ]; then
+        dnf install python-pip gcc clang cmake jose libjose cryptsetup socat tpm2-tools luksmeta libluksmeta -y
+    else
+        dnf install python-pip gcc clang cmake jose libjose-devel cryptsetup-devel socat tpm2-tools luksmeta libluksmeta-devel -y
+    fi
+
+    pip3 install ninja meson
     git clone https://github.com/sarroutbi/clevis -b 202405281240-clevis-pkcs11
+    pushd clevis
+    rm -fr build; mkdir build; pushd build; meson setup --prefix=/usr --wipe ..; meson compile -v; meson install; popd
+    popd
 }
 
 
@@ -80,6 +91,8 @@ rlJournalStart
         # Get serial number of the token
         TOKEN_SERIAL_NUM=$(pkcs11-tool --module $SOFTHSM_LIB -L | grep "serial num" | awk '{print $4}')
         URI="{\"uri\": \"pkcs11:model=SoftHSM%20v2;manufacturer=SoftHSM%20project;serial=$TOKEN_SERIAL_NUM;token=$TOKEN_LABEL;id=$ID;module-path=$SOFTHSM_LIB?pin-value=$PINVALUE\"}"
+
+        development_clevis
     rlPhaseEnd
 
     rlPhaseStart FAIL "clevis pkcs11 - Simple text encryption and decryption"
