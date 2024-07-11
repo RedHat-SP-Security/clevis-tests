@@ -14,6 +14,8 @@ tag:
   - NoRHEL4
   - NoRHEL5
   - NoRHEL6
+  - NoRHEL7
+  - NoRHEL8
   - TIPfail_Security
   - Tier1
   - Tier1security
@@ -24,5 +26,5 @@ extra-task: /CoreOS/clevis/Sanity/pkcs11/basic
 #extra-nitrate: TC#0XXXXX
 adjust:
   - enabled: false
-    when: distro == rhel-4, rhel-5, rhel-6
+    when: distro == rhel-4, rhel-5, rhel-6, rhel-7, rhel-8
     continue: false
