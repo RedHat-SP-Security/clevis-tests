@@ -90,7 +90,7 @@ rlJournalStart
 
         # Get serial number of the token
         TOKEN_SERIAL_NUM=$(pkcs11-tool --module $SOFTHSM_LIB -L | grep "serial num" | awk '{print $4}')
-        URI="{\"uri\": \"pkcs11:model=SoftHSM%20v2;manufacturer=SoftHSM%20project;serial=$TOKEN_SERIAL_NUM;token=$TOKEN_LABEL;id=$ID;module-path=$SOFTHSM_LIB?pin-value=$PINVALUE\"}"
+        URI="{\"uri\": \"pkcs11:model=SoftHSM%20v2;manufacturer=SoftHSM%20project;serial=$TOKEN_SERIAL_NUM;token=$TOKEN_LABEL;id=$ID;module-path=$SOFTHSM_LIB?pin-value=$PINVALUE\", \"mechanism\": \"RSA-PKCS\"}"
 
         development_clevis
     rlPhaseEnd
@@ -109,7 +109,7 @@ rlJournalStart
     rlPhaseStart FAIL "Simple text encryption and decryption (pin-source)"
         # TODO: THE PIN-SOURCE attribute not yet implemented so this test case will fail
         rlRun "echo $PINVALUE > $PWD/pin"
-        URI="{\"uri\": \"pkcs11:model=SoftHSM%20v2;manufacturer=SoftHSM%20project;serial=$TOKEN_SERIAL_NUM;token=$TOKEN_LABEL;id=$ID;module-path=$SOFTHSM_LIB?pin-source=$PWD/pin\"}"
+        URI="{\"uri\": \"pkcs11:model=SoftHSM%20v2;manufacturer=SoftHSM%20project;serial=$TOKEN_SERIAL_NUM;token=$TOKEN_LABEL;id=$ID;module-path=$SOFTHSM_LIB?pin-source=$PWD/pin\", \"mechanism\": \"RSA-PKCS\"}"
         rlRun "echo 'this is a second secret' > plain_text" 0 "Create a file to encrypt"
         rlRun "clevis encrypt pkcs11 '$URI' < plain_text > JWE" 0 "Encrypting the plain text"
 
@@ -122,7 +122,7 @@ rlJournalStart
 
     rlPhaseStart FAIL "Simple text encryption and decryption (card removal before decryption)"
         rlRun "echo 'this is a third secret' > plain_text" 0 "Create a file to encrypt"
-        URI="{\"uri\": \"pkcs11:model=SoftHSM%20v2;manufacturer=SoftHSM%20project;serial=$TOKEN_SERIAL_NUM;token=$TOKEN_LABEL;id=$ID;module-path=$SOFTHSM_LIB?pin-value=$PINVALUE\"}"
+        URI="{\"uri\": \"pkcs11:model=SoftHSM%20v2;manufacturer=SoftHSM%20project;serial=$TOKEN_SERIAL_NUM;token=$TOKEN_LABEL;id=$ID;module-path=$SOFTHSM_LIB?pin-value=$PINVALUE\", \"mechanism\": \"RSA-PKCS\"}"
         rlRun "clevis encrypt pkcs11 '$URI' < plain_text > JWE"
 
         rlAssertDiffer JWE plain_text
