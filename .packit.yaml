@@ -1,0 +1,17 @@
+---
+jobs:
+  - job: tests
+    trigger: pull_request
+    branch: master
+    targets:
+      - fedora-stable
+      - CentOS-Stream-10
+    skip_build: true
+    tf_extra_params:
+      test:
+        tmt:
+          name: "/Plans/ci"
+      environment:
+        - tmt:
+            context:
+              target_PR_branch: master 

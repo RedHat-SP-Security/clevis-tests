@@ -1,0 +1,17 @@
+summary: test plan for clevis upstream testing
+
+
+prepare:
+  - how: shell
+    script:
+     - systemctl disable --now dnf-makecache.service || true
+     - systemctl disable --now dnf-makecache.timer || true
+     - dnf makecache
+
+discover:
+  - name: Upstream_tests_ci_clevis
+    how: fmf
+    filter: tag:CI-Tier-1
+
+execute:
+    how: tmt
