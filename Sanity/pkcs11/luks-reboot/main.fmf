@@ -7,8 +7,9 @@ recommend:
   - softhsm
   - opensc
   - jose
+  - cryptsetup
   - openssl
-duration: 10m
+duration: 20m
 enabled: true
 tag:
   - CI-Tier-1
