@@ -51,6 +51,8 @@ PACKAGE="clevis"
 rlJournalStart
     rlPhaseStartSetup
         rlAssertRpm $PACKAGE
+        # Include utils library containing critical functions
+        rlRun ". ../../../TestHelpers/utils.sh" || rlDie "cannot import function script"
         rlRun "TMPDIR=\$(mktemp -d)" 0 "Creating tmp directory"
         rlRun "pushd $TMPDIR"
 
