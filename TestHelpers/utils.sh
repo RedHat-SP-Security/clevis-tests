@@ -21,9 +21,9 @@ development_clevis() {
     # TODO: remove this whole function once the clevis pkcs11 feature development is done
     rlIsRHEL 9
     if [ $? -eq 0 ]; then
-        rlRun "dnf install python-pip gcc clang cmake jose libjose cryptsetup socat tpm2-tools luksmeta libluksmeta -y"
+        rlRun "dnf install python-pip gcc clang cmake jose libjose cryptsetup socat tpm2-tools luksmeta libluksmeta git -y"
     else
-        rlRun "dnf install python-pip gcc clang cmake jose libjose-devel cryptsetup-devel socat tpm2-tools luksmeta libluksmeta-devel -y"
+        rlRun "dnf install python-pip gcc clang cmake jose libjose-devel cryptsetup-devel socat tpm2-tools luksmeta libluksmeta-devel git -y"
     fi
 
     rlRun "pip3 install ninja meson"

@@ -136,13 +136,13 @@ rlJournalStart
             rlRun "systemctl enable clevis-luks-pkcs11-askpass.socket"
 
             rlRun "clevis luks list -d ${parent_disk}"
-            rlRun "echo -n $disk_uuid > $disk/secret_file"
+            rlRun "echo -n $disk_uuid > /encrypted_disk/secret_file"
 
             tmt-reboot -t 600
 
         elif [ $TMT_REBOOT_COUNT == 1 ]; then
-            rlAssertExists $disk/secret_file
-            disk_uuid=$(cat $disk/secret_file)
+            rlAssertExists /encrypted_disk/secret_file
+            disk_uuid=$(cat /encrypted_disk/secret_file)
             rlRun "journalctl -u clevis-luks-pkcs11-askpass.service -b 0 | tee clevis-luks-service.log"
             rlAssertGrep "Device:/dev/disk/by-uuid/$disk_uuid unlocked successfully by clevis" "clevis-luks-service.log"
         fi
