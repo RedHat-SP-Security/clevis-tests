@@ -30,16 +30,13 @@
 . /usr/bin/rhts-environment.sh || :
 . /usr/share/beakerlib/beakerlib.sh || exit 1
 
-# Include utils library containing critical functions
-lib_path="${PWD%$TMT_TEST_NAME}/lib/utils.sh"
-. $lib_path || exit 1
-
-
 PACKAGE="clevis"
 
 rlJournalStart
     rlPhaseStartSetup
         rlAssertRpm $PACKAGE
+        # Include utils library containing critical functions
+        rlRun ". ../../../TestHelpers/utils.sh" || rlDie "cannot import function script"
         rlRun "TMPDIR=\$(mktemp -d)" 0 "Creating tmp directory"
         rlRun "pushd $TMPDIR"
 
@@ -86,7 +83,7 @@ rlJournalStart
         rlRun "echo 'this is a secret 2' > plain_text" 0 "Create a file to encrypt"
         rlRun "clevis encrypt pkcs11 '$URI' < plain_text > JWE" 0 "Encrypting the plain text"
 
-         rlAssertDiffer JWE plain_text
+        rlAssertDiffer JWE plain_text
 
         rlRun "clevis decrypt pkcs11 < JWE > decrypted_message" 0 "Decrypting the JWE"
         rlAssertNotDiffer decrypted_message plain_text
