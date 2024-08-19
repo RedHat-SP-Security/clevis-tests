@@ -8,6 +8,7 @@ recommend:
   - opensc
   - jose
   - cryptsetup
+  - openssl
   - a2x
   - git
 duration: 10m

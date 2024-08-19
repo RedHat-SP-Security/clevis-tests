@@ -30,21 +30,6 @@
 . /usr/bin/rhts-environment.sh || :
 . /usr/share/beakerlib/beakerlib.sh || exit 1
 
-# Include utils library containing critical functions
-lib_path="${PWD%$TMT_TEST_NAME}/lib/utils.sh"
-. $lib_path || exit 1
-
-luks_setup() {
-    rlRun "dd if=/dev/zero of=loopfile bs=100M count=1"
-    rlRun "lodev=\$(losetup -f --show loopfile)"
-    echo -n redhat123 > pwfile
-    rlRun "cryptsetup luksFormat --batch-mode --key-file pwfile \"$lodev\""
-}
-luks_destroy() {
-    rlRun "losetup -d \"$lodev\""
-    rlRun "rm -f loopfile pwfile"
-}
-
 
 PACKAGE="clevis"
 

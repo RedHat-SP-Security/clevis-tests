@@ -30,14 +30,11 @@
 . /usr/bin/rhts-environment.sh || :
 . /usr/share/beakerlib/beakerlib.sh || exit 1
 
-# Include utils library containing critical functions
-lib_path="${PWD%$TMT_TEST_NAME}/lib/utils.sh"
-. $lib_path || exit 1
 
-setup_luks() {
-    # TODO: add the link to the kickstart into the description
+setup_luks_encrypted_single_disk() {
     # Setup the system so it has encrypted secondary disk that can be used to verify the Clevis pkcs11 disk
-    # decrypting functionality.
+    # decrypting functionality. The disk creation of the second disk is specified in the kickstart section
+    # of the plan iin the "Plans/ci/pkcs11-single-encrypted-disk"
 
     rlAssertRpm "cryptsetup"
     # Get the name of the created disk (done by kickstart preparation) that is intended for the test.
@@ -65,12 +62,6 @@ setup_luks() {
     # Get the UUID of the parent disk and put it into the crypttab file
     disk_uuid=$(lsblk --nodeps -o uuid $parent_disk | tail -1)
     rlRun "echo \"luks-$disk_uuid    UUID=$disk_uuid    /run/systemd/clevis-pkcs11.sock    keyfile-timeout=90s\" >> /etc/crypttab"
-}
-
-prepare_dracut() {
-    # Put the softhsm library and the configuration file to initramfs so it can be used
-    # by Clevis to load the smartcard and decrypt the disk.
-    rlRun "dracut -f -v --include $SOFTHSM_LIB $SOFTHSM_LIB --include /etc/softhsm2.conf /etc/softhsm2.conf" 0 "Include softhsm libraries in initramfs"
 }
 
 
@@ -118,7 +109,7 @@ rlJournalStart
 
             development_clevis
 
-            setup_luks
+            setup_luks_encrypted_single_disk
 
             prepare_dracut
         fi

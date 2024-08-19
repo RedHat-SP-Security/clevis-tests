@@ -28,7 +28,6 @@ execute:
   discover:
     - name: tests the basic pkcs11 luks functionality of clevis
       how: fmf
-      filter: tag:CI-Tier-1
       test:
         - Sanity/pkcs11/luks
 
@@ -65,7 +64,6 @@ execute:
     discover:
       - name: test create encrypted disk
         how: fmf
-        filter: tag:CI-Tier-1
         test:
           - pkcs11/single-encrypted-disk
     adjust:
