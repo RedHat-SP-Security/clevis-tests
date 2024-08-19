@@ -95,12 +95,7 @@ rlJournalStart
 
             install_softhsm
 
-            TOKEN_LABEL="test_token"
-            SOFTHSM_LIB="/usr/lib64/softhsm/libsofthsm.so"
-            PINVALUE=1234
-            ID="0001"
-            rlRun -l "softhsm2-util --init-token --label $TOKEN_LABEL --free --pin $PINVALUE --so-pin $PINVALUE" 0 "Initialize token"
-            rlRun -l "pkcs11-tool --keypairgen --key-type="rsa:2048" --login --pin=$PINVALUE --module=$SOFTHSM_LIB --label=$TOKEN_LABEL --id=$ID" 0 "Generating a new key pair"
+            create_token
 
             # Get serial number of the token
             TOKEN_SERIAL_NUM=$(pkcs11-tool --module $SOFTHSM_LIB -L | grep "serial num" | awk '{print $4}')

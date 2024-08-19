@@ -57,3 +57,18 @@ prepare_dracut() {
         rlRun "dracut -f -v --include $SOFTHSM_LIB $SOFTHSM_LIB --include /etc/softhsm2.conf /etc/softhsm2.conf" 0 "Include softhsm libraries in initramfs"
     rlPhaseEnd
 }
+
+create_token() {
+    # Create a softhsm token
+    rlPhaseStart FAIL "create softhsm token"
+        TOKEN_LABEL="test_token"
+        SOFTHSM_LIB="/usr/lib64/softhsm/libsofthsm.so"
+        PINVALUE=1234
+        ID="0001"
+
+        rlRun -l "softhsm2-util --init-token --label $TOKEN_LABEL --free --pin $PINVALUE --so-pin $PINVALUE" 0 "Initialize token"
+        rlRun -l "pkcs11-tool --keypairgen --key-type="rsa:2048" --login --pin=$PINVALUE --module=$SOFTHSM_LIB --label=$TOKEN_LABEL --id=$ID" 0 "Generating a new key pair"
+
+        rlRun -l "pkcs11-tool -L --module=$SOFTHSM_LIB"
+    rlPhaseEnd
+}
