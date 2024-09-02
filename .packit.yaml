@@ -1,17 +1,30 @@
 ---
 jobs:
-  - job: tests
+  - &tests-ci
+    job: tests
     trigger: pull_request
     branch: master
+    use_internal_tf: True
     targets:
       - fedora-stable
       - centos-stream-10-x86_64
     skip_build: true
+    identifier: "sanity"
     tf_extra_params:
       test:
         tmt:
-          name: "/Plans/ci"
+          name: "/Plans/ci/sanity"
       environment:
         - tmt:
-            context:
-              target_PR_branch: master 
+          context:
+            target_PR_branch: master
+
+  - &tests-ci-pkcs11
+    <<: *tests-ci
+    identifier: "pkcs11"
+    targets:
+      - fedora-39
+    tf_extra_params:
+      test:
+        tmt:
+          name: "/Plans/ci/pkcs11"

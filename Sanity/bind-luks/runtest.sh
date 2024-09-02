@@ -70,27 +70,14 @@ stop_tang() {
     rlRun "fuser -s -k \"$1/tcp\""
 }
 
-luks_setup() {
-    rlPhaseStart FAIL "cryptsetup setup"
-        rlRun "dd if=/dev/zero of=loopfile bs=100M count=1"
-        rlRun "lodev=\$(losetup -f --show loopfile)"
-        echo -n redhat123 > pwfile
-        rlRun "cryptsetup luksFormat --batch-mode --key-file pwfile \"$lodev\""
-    rlPhaseEnd
-}
-luks_destroy() {
-    rlPhaseStart FAIL "cryptsetup destroy"
-        rlRun "losetup -d \"$lodev\""
-        rlRun "rm -f loopfile pwfile"
-    rlPhaseEnd
-}
-
 
 PACKAGE="clevis"
 
 rlJournalStart
     rlPhaseStartSetup
         rlAssertRpm $PACKAGE
+        # Include utils library containing critical functions
+        rlRun ". ../../TestHelpers/utils.sh" || rlDie "cannot import function script"
         rlRun "TmpDir=\$(mktemp -d)" 0 "Creating tmp directory"
         rlRun "pushd $TmpDir"
     rlPhaseEnd

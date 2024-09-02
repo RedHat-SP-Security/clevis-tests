@@ -1,4 +1,4 @@
-summary: tests the basic pkcs#11 functionality of clevis
+summary: tests the basic pkcs#11 luks functionality of clevis
 component:
   - clevis
 test: ./runtest.sh
@@ -14,21 +14,20 @@ recommend:
 duration: 10m
 enabled: true
 tag:
-  - CI-Tier-1
   - NoRHEL4
   - NoRHEL5
   - NoRHEL6
   - NoRHEL7
   - NoRHEL8
   - TIPfail_Security
-  - Tier1
-  - Tier1security
   - TierCandidatesFAIL
-tier: '1'
-extra-summary: /CoreOS/clevis/Sanity/pkcs11/basic
-extra-task: /CoreOS/clevis/Sanity/pkcs11/basic
+extra-summary: /CoreOS/clevis/Sanity/pkcs11/luks
+extra-task: /CoreOS/clevis/Sanity/pkcs11/luks
 #extra-nitrate: TC#0XXXXX
 adjust:
   - enabled: false
     when: distro == rhel-4, rhel-5, rhel-6, rhel-7, rhel-8
+    continue: false
+  - enabled: false
+    when: hwtpm != true
     continue: false
