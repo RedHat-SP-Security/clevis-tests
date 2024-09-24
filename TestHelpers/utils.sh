@@ -27,7 +27,7 @@ development_clevis() {
     fi
 
     rlRun "pip3 install ninja meson"
-    rlRun "git clone https://github.com/sarroutbi/clevis -b 202405281240-clevis-pkcs11"
+    rlRun "git clone https://github.com/latchset/clevis"
     rlRun "pushd clevis"
     rlRun "rm -fr build; mkdir build; pushd build; meson setup --prefix=/usr --wipe ..; meson compile -v; meson install; popd"
     rlRun "popd"
