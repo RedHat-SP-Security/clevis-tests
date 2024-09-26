@@ -11,6 +11,7 @@ recommend:
   - openssl
   - a2x
   - git
+  - python3-pip
 duration: 10m
 enabled: true
 tag:
