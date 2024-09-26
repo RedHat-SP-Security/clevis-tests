@@ -48,6 +48,9 @@ rlJournalStart
         for r in rhel-buildroot rhel-CRB rhel-CRB-latest beaker-CRB; do
             ! dnf config-manager --set-enabled "${r}"
         done
+        for repo in $(dnf repolist --all | grep -iE "crb|codeready|powertools" | grep -ivE "debug|source" | cut -d " " -f1); do
+            dnf config-manager --set-enabled "${repo}"
+        done
 
         rlRun "dnf builddep -y clevis*" 0 "Install clevis build dependencies"
 
