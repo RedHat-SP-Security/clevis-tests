@@ -77,7 +77,8 @@ PACKAGE="clevis"
 #   4. Create a new initramfs that contains softhsm libraries and tokens so it
 #      can be picked up by Clevis during the boot time
 #   5. Use the TPM2 and the softhsm token as a 2 factor clevis encryption of the disk
-#   6. Reboot the system and verify that the disk was successfully decrypted by Clevis
+#   6. Execute dracut
+#   7. Reboot the system and verify that the disk was successfully decrypted by Clevis
 #      and mounted to the running system
 rlJournalStart
     rlPhaseStartSetup
@@ -106,7 +107,6 @@ rlJournalStart
 
             setup_luks_encrypted_single_disk
 
-            prepare_dracut
         fi
     rlPhaseEnd
 
@@ -120,6 +120,9 @@ rlJournalStart
                         }
                     }'"
             rlRun "systemctl enable clevis-luks-pkcs11-askpass.socket"
+
+            # Dracut execution has to be done after clevis binds the disk
+            prepare_dracut
 
             rlRun "clevis luks list -d ${parent_disk}"
             rlRun "echo -n $disk_uuid > /encrypted_disk/secret_file"
