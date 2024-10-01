@@ -26,21 +26,17 @@ execute:
       tpm:
         version: "2"
   discover:
-    - name: tests the basic pkcs11 luks functionality of clevis
+    - name: tests the basic pkcs11 luks functionality of clevis (including the TPM2 module)
       how: fmf
       test:
         - Sanity/pkcs11/luks
 
 /pkcs11-single-encrypted-disk:
-    context:
-      hwtpm: true
     provision:
       hardware:
         disk:
           - size: '>= 10 GB'
           - size: '>= 1GB'
-        tpm:
-          version: "2"
       kickstart:
         metadata: no_autopart
         pre-install: |

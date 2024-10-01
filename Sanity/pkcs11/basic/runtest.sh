@@ -41,8 +41,7 @@ rlJournalStart
         rlRun "pushd $TMPDIR"
 
         rlRun "packageVersion=$(rpm -q ${PACKAGE} --qf '%{name}-%{version}-%{release}\n')"
-        # TODO: add correct version that will have the pkcs11 feature implemented
-        rlTestVersion "${packageVersion}" '>=' 'clevis-20-1'
+        rlTestVersion "${packageVersion}" '>=' 'clevis-20-2'
 
         install_softhsm
 

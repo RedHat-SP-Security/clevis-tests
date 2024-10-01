@@ -34,7 +34,7 @@
 setup_luks_encrypted_single_disk() {
     # Setup the system so it has encrypted secondary disk that can be used to verify the Clevis pkcs11 disk
     # decrypting functionality. The disk creation of the second disk is specified in the kickstart section
-    # of the plan iin the "Plans/ci/pkcs11-single-encrypted-disk"
+    # of the plan in the "Plans/ci/pkcs11-single-encrypted-disk"
 
     rlAssertRpm "cryptsetup"
     # Get the name of the created disk (done by kickstart preparation) that is intended for the test.
@@ -76,7 +76,7 @@ PACKAGE="clevis"
 #      load the disk during the boot time
 #   4. Create a new initramfs that contains softhsm libraries and tokens so it
 #      can be picked up by Clevis during the boot time
-#   5. Use the TPM2 and the softhsm token as a 2 factor clevis encryption of the disk
+#   5. Clevis binds the disk using the pkcs11 softhsm token
 #   6. Execute dracut
 #   7. Reboot the system and verify that the disk was successfully decrypted by Clevis
 #      and mounted to the running system
@@ -87,12 +87,8 @@ rlJournalStart
             # Include utils library containing critical functions
             rlRun ". ../../../TestHelpers/utils.sh" || rlDie "cannot import function script"
 
-            tpm_version=$(cat /sys/class/tpm/tpm*/tpm_version_major)
-            rlAssertEquals "Check if the tpm2 version is present" $tpm_version "2"
-
             rlRun "packageVersion=$(rpm -q ${PACKAGE} --qf '%{name}-%{version}-%{release}\n')"
-            # TODO: add correct version that will have the pkcs11 feature implemented
-            rlTestVersion "${packageVersion}" '>=' 'clevis-20-1'
+            rlTestVersion "${packageVersion}" '>=' 'clevis-20-2'
 
             install_softhsm
 
@@ -112,13 +108,7 @@ rlJournalStart
 
     rlPhaseStart FAIL "clevis luks pkcs11 - disk encryption with a reboot"
         if [ $TMT_REBOOT_COUNT == 0 ]; then
-            rlRun "clevis luks bind -k pwfile -d ${parent_disk} sss '{
-                        \"t\": 2,
-                        \"pins\": {
-                            \"pkcs11\": $URI,
-                            \"tpm2\": {}
-                        }
-                    }'"
+            rlRun "clevis luks bind -k pwfile -d ${parent_disk} pkcs11 '$URI'" 0 "Bind the clevis to the disk"
             rlRun "systemctl enable clevis-luks-pkcs11-askpass.socket"
 
             # Dracut execution has to be done after clevis binds the disk
