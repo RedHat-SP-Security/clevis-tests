@@ -1,0 +1,64 @@
+# Extra env variables for this snippet:
+#  - TANG_SERVER
+# Extra packages required in this snippet:
+#  * clevis-dracut
+LOG_FILE=/root/postinstall-clevis-boot-unlock-all-pins.log
+[ -n "@NO_SAVE@" ] && LOG_FILE=/dev/null
+exec < /dev/tty3 > /dev/tty3
+chvt 3
+echo "#######################"
+echo "# %clevis-boot-unlock-all-pins post   #"
+echo "#######################"
+(
+  TANG_SERVER='@TANG_SERVER@'
+  REQ_PKGS='clevis-dracut'
+  # Sanity check.
+  skip=
+  [ -z "${TANG_SERVER}" ] && skip=true
+
+  #check if tpm device exist
+  [ -e /dev/tpm0 ] || skip=true
+  for _pkg in ${REQ_PKGS}; do
+    rpm -q "${_pkg}" >/dev/null || skip=true
+  done
+  if [ -z "${skip}" ]; then
+    # Download advertisement.
+    curl -sfg http://"${TANG_SERVER}"/adv -o adv.jws
+    # Bind all LUKS devices
+    max_attempts=10
+    for dev in $(blkid -t TYPE=crypto_LUKS -o device); do
+      attempts=0
+      # We may hit an issue in which the generation of the new passphrase
+      # fails with "Error: Password generation failed - required entropy
+      # too low for settings" - loop until the binding succeeds or 10 times
+      # per device.
+      # https://access.redhat.com/solutions/3486131
+      until clevis luks bind -f -d "${dev}" sss '{"t":2,"pins":{"tang":[{"url":"http://'"${TANG_SERVER}"'","adv":"adv.jws"}], "tpm2": {"pcr_ids":"0,7"}}}' <<< '@LUKS_PW@'; do
+        attempts=$((attempts+1))
+        [ "${attempts}" -ge "${max_attempts}" ] && break
+        sleep 0.1
+      done
+    done
+    # Enable clevis-luks-askpass.
+    systemctl enable clevis-luks-askpass.path ||:
+    mkdir -p /etc/dracut.conf.d/
+    echo 'kernel_cmdline="rd.neednet=1"' > /etc/dracut.conf.d/10mt-ks-post-clevis.conf
+    dracut -f --regenerate-all
+  else
+    echo "##################################################################"
+    echo "#    Kickstart snippet skipped. Please make sure the required    #"
+    echo "# variables are defined and the required packages are installed. #"
+    echo "##################################################################"
+    echo
+    echo "* Required variables:"
+    echo "TANG_SERVER(${TANG_SERVER})"
+    echo
+    echo "* Required packages: ${REQ_PKGS}"
+    echo
+    echo "* Installed packages:"
+    rpm -qa | sort
+    echo
+  fi
+) 2>&1 | tee "${LOG_FILE}"
+chvt 1
+# vim:set ts=2 sw=2 et:

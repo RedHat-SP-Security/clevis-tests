@@ -1,0 +1,13 @@
+summary: vm
+description: 'provides helper shell functions for testing with VMs'
+contact: Sergio Correia <scorreia@redhat.com>
+test: ./test.sh
+framework: beakerlib
+recommend:
+  - openssh-clients
+duration: 10m
+enabled: true
+adjust:
+-   enabled: false
+    when: distro == rhel-4, rhel-5, rhel-6, rhel-7
+    continue: false
