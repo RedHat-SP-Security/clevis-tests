@@ -23,7 +23,7 @@ jobs:
     <<: *tests-ci
     identifier: "pkcs11"
     targets:
-      - fedora-39
+      - fedora-40
     tf_extra_params:
       test:
         tmt:
