@@ -83,9 +83,10 @@ PACKAGE="clevis"
 rlJournalStart
     rlPhaseStartSetup
         if [ $TMT_REBOOT_COUNT == 0 ]; then
-            rlAssertRpm $PACKAGE
             # Include utils library containing critical functions
             rlRun ". ../../../TestHelpers/utils.sh" || rlDie "cannot import function script"
+            install_clevis_pkcs11
+            rlAssertRpm $PACKAGE
 
             rlRun "packageVersion=$(rpm -q ${PACKAGE} --qf '%{name}-%{version}-%{release}\n')"
             rlTestVersion "${packageVersion}" '>=' 'clevis-20-2'
@@ -98,11 +99,7 @@ rlJournalStart
             TOKEN_SERIAL_NUM=$(pkcs11-tool --module $SOFTHSM_LIB -L | grep "serial num" | awk '{print $4}')
             rlAssertNotEquals "Test that the serial number is not empty" "" $TOKEN_SERIAL_NUM
             URI="{\"uri\": \"pkcs11:model=SoftHSM%20v2;serial=$TOKEN_SERIAL_NUM;token=$TOKEN_LABEL;id=$ID;module-path=$SOFTHSM_LIB?pin-value=$PINVALUE\", \"mechanism\": \"RSA-PKCS\"}"
-
-            development_clevis
-
             setup_luks_encrypted_single_disk
-
         fi
     rlPhaseEnd
 
