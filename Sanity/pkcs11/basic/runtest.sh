@@ -34,6 +34,7 @@ PACKAGE="clevis"
 
 rlJournalStart
     rlPhaseStartSetup
+        echo "Nothing"
         rlAssertRpm $PACKAGE
         # Include utils library containing critical functions
         rlRun ". ../../../TestHelpers/utils.sh" || rlDie "cannot import function script"
