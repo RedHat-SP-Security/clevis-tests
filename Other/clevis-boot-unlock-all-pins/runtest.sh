@@ -159,9 +159,17 @@ EOF
       || rlDie "VM was not provisioned in time"
 
     rlRun "10mtctl start \"${VM_ID}\""
+    #10mtctl info <ID>
+    #10mtctl console <ID>
     rlRun "vmWaitByAddr ${ADDR}" \
       || rlDie "Cannot continue without VM responding"
-    rlRun "vmCmd ${ADDR} journalctl -b | grep \"Finished systemd-cryptsetup\""
+
+    if rlIsRHELLike '>=10'; then
+      rlRun "vmCmd ${ADDR} journalctl -b | grep \"Finished systemd-cryptsetup\""
+    else
+      rlRun "vmCmd ${ADDR} journalctl -b | grep \"Finished Cryptography Setup for luks-\""
+      rlRun "vmCmd ${ADDR} journalctl -b | grep \"clevis-luks-askpass.service: Deactivated successfully\""
+    fi
 
     # Now we setup any extra VM repos.
     if [ -n "${EXTRA_VM_REPOS}" ]; then

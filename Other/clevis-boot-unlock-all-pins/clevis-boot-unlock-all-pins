@@ -33,7 +33,7 @@ echo "#######################"
       # too low for settings" - loop until the binding succeeds or 10 times
       # per device.
       # https://access.redhat.com/solutions/3486131
-      until clevis luks bind -f -d "${dev}" sss '{"t":2,"pins":{"tang":[{"url":"http://'"${TANG_SERVER}"'","adv":"adv.jws"}], "tpm2": {"pcr_ids":"0,7"}}}' <<< '@LUKS_PW@'; do
+      until clevis luks bind -f -d "${dev}" sss '{"t":2,"pins":{"tang":[{"url":"http://'"${TANG_SERVER}"'","adv":"adv.jws"}], "tpm2": {"pcr_bank":"sha256", "pcr_ids":"0,7"}}}' <<< '@LUKS_PW@'; do
         attempts=$((attempts+1))
         [ "${attempts}" -ge "${max_attempts}" ] && break
         sleep 0.1
