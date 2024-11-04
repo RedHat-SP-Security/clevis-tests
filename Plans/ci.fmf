@@ -32,6 +32,8 @@ execute:
         - Sanity/pkcs11/luks
 
 /pkcs11-single-encrypted-disk:
+    context:
+      kickstart_pkcs11: true
     provision:
       hardware:
         disk:
