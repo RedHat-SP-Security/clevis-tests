@@ -19,18 +19,23 @@ install_softhsm() {
 
 development_clevis() {
     # TODO: remove this whole function once the clevis pkcs11 feature development is done
-    rlIsRHEL 9
-    if [ $? -eq 0 ]; then
-        rlRun "dnf install python-pip gcc clang cmake jose libjose cryptsetup socat tpm2-tools luksmeta libluksmeta -y"
+    if rpm -qa | grep -q clevis-pin-pkcs11; then
+        export PKCS11_IMPLEMENTED=1
+        rlRun "rpm -q clevis-pin-pkcs11"
+        rlLogInfo "Package is already installed on system!"
     else
-        rlRun "dnf install python-pip gcc clang cmake jose libjose-devel cryptsetup-devel socat tpm2-tools luksmeta libluksmeta-devel -y"
+        rlIsRHEL 9
+        if [ $? -eq 0 ]; then
+            rlRun "dnf install python-pip gcc clang cmake jose libjose cryptsetup socat tpm2-tools luksmeta libluksmeta -y"
+        else
+            rlRun "dnf install python-pip gcc clang cmake jose libjose-devel cryptsetup-devel socat tpm2-tools luksmeta libluksmeta-devel -y"
+        fi
+        rlRun "pip3 install ninja meson"
+        rlRun "git clone https://github.com/latchset/clevis"
+        rlRun "pushd clevis"
+        rlRun "rm -fr build; mkdir build; pushd build; meson setup --prefix=/usr --wipe ..; meson compile -v; meson install; popd"
+        rlRun "popd"
     fi
-
-    rlRun "pip3 install ninja meson"
-    rlRun "git clone https://github.com/latchset/clevis"
-    rlRun "pushd clevis"
-    rlRun "rm -fr build; mkdir build; pushd build; meson setup --prefix=/usr --wipe ..; meson compile -v; meson install; popd"
-    rlRun "popd"
 }
 
 luks_setup() {

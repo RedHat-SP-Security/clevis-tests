@@ -11,6 +11,14 @@ recommend:
   - openssl
   - a2x
   - git
+  - clevis-pin-pkcs11
+  - python-pip
+  - libjose-devel
+  - cryptsetup-devel
+  - socat
+  - tpm2-tools
+  - luksmeta
+  - libluksmeta-devel
 duration: 20m
 enabled: true
 tag:
@@ -28,3 +36,6 @@ adjust:
   - enabled: false
     when: distro == rhel-4, rhel-5, rhel-6, rhel-7, rhel-8
     continue: false
+  - when: kickstart_pkcs11 is not defined or kickstart_pkcs11 == false
+    enabled: false
+    because: This tests works only with provisioned kickstart file in plan and minimal hardware reqs.
