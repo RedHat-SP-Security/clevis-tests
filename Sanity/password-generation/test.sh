@@ -47,7 +47,7 @@ rlJournalStart
 
 
     slot_count=6
-    rlPhaseStartTest "${slot_count} attempts for clevis luks bind"
+    rlPhaseStartTest "clevis luks bind - ${slot_count} attempts"
         for i in $(seq 1 $slot_count); do
             rlRun "echo -n redhat123 | clevis luks bind -f -k - -d ${lodev} -y tang '{\"url\": \"localhost\"}'" \
                 0 "Clevis binding attempt ${i}/${slot_count}" || break
