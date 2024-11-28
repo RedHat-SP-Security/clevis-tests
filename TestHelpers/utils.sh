@@ -25,12 +25,8 @@ development_clevis() {
     else
         rlRun "dnf install python-pip gcc clang cmake jose libjose-devel cryptsetup-devel socat tpm2-tools luksmeta libluksmeta-devel -y"
     fi
-
-    rlRun "pip3 install ninja meson"
-    rlRun "git clone https://github.com/latchset/clevis"
-    rlRun "pushd clevis"
-    rlRun "rm -fr build; mkdir build; pushd build; meson setup --prefix=/usr --wipe ..; meson compile -v; meson install; popd"
-    rlRun "popd"
+    rlRun "dnf install -y clevis clevis-pin-tpm2 clevis-luks clevis-dracut"
+    rlRun "dnf info clevis-pin-pkcs11 && dnf install -y clevis-pin-pkcs11 || :"
 }
 
 luks_setup() {
