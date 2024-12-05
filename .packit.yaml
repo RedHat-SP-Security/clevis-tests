@@ -1,4 +1,3 @@
----
 jobs:
   - &tests-ci
     job: tests
@@ -15,16 +14,22 @@ jobs:
         tmt:
           name: "/Plans/ci/sanity"
       environment:
-        - tmt:
+        tmt:
           context:
             target_PR_branch: master
 
   - &tests-ci-pkcs11
     <<: *tests-ci
     identifier: "pkcs11"
+    use_internal_tf: True
     targets:
-      - fedora-40
+      fedora-40: {}
+      centos-stream-9-x86_64:
+          distros: [RHEL-9.6.0-Nightly]
+      centos-stream-10-x86_64:
+          distros: [RHEL-10.0-Nightly]
     tf_extra_params:
       test:
         tmt:
           name: "/Plans/ci/pkcs11"
+

@@ -12,6 +12,14 @@ recommend:
   - a2x
   - git
   - python3-pip
+  - clevis-pin-pkcs11
+  - python-pip
+  - libjose-devel
+  - cryptsetup-devel
+  - socat
+  - tpm2-tools
+  - luksmeta
+  - libluksmeta-devel
 duration: 10m
 enabled: true
 tag:
