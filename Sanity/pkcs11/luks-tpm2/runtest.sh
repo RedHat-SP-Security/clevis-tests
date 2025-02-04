@@ -35,9 +35,10 @@ PACKAGE="clevis"
 
 rlJournalStart
     rlPhaseStartSetup
+        rlRun ". ../../../TestHelpers/utils.sh" || rlDie "cannot import function script"
+        install_clevis_pkcs11
         rlAssertRpm $PACKAGE
         # Include utils library containing critical functions
-        rlRun ". ../../../TestHelpers/utils.sh" || rlDie "cannot import function script"
         rlRun "TMPDIR=\$(mktemp -d)" 0 "Creating tmp directory"
         rlRun "pushd $TMPDIR"
 
@@ -56,9 +57,6 @@ rlJournalStart
         TOKEN_SERIAL_NUM=$(pkcs11-tool --module $SOFTHSM_LIB -L | grep "serial num" | awk '{print $4}')
         rlAssertNotEquals "Test that the serial number is not empty" "" $TOKEN_SERIAL_NUM
         URI="{\"uri\": \"pkcs11:model=SoftHSM%20v2;manufacturer=SoftHSM%20project;serial=$TOKEN_SERIAL_NUM;token=$TOKEN_LABEL;id=$ID;module-path=$SOFTHSM_LIB?pin-value=$PINVALUE\", \"mechanism\": \"RSA-PKCS\"}"
-
-        development_clevis
-
         luks_setup
     rlPhaseEnd
 
