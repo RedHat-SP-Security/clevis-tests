@@ -10,6 +10,7 @@ tag:
   - NoRHEL7
   - Tier1
   - CI-Tier-1
+  - ImageMode
 link:
   - verifies: https://bugzilla.redhat.com/show_bug.cgi?id=1956760
   - verifies: https://bugzilla.redhat.com/show_bug.cgi?id=2209058

@@ -22,6 +22,7 @@ tag:
   - Tier1
   - Tier1security
   - TierCandidatesFAIL
+  - ImageMode
 tier: '1'
 extra-summary: /CoreOS/clevis/Sanity/pin-sss
 extra-task: /CoreOS/clevis/Sanity/pin-sss

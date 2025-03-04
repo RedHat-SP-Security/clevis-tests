@@ -29,6 +29,7 @@ tag:
   - TIPpass_Security
   - Tier1
   - Tier1security
+  - ImageMode
 tier: '1'
 extra-summary: /CoreOS/clevis/Sanity/bind-luks
 extra-task: /CoreOS/clevis/Sanity/bind-luks
