@@ -33,6 +33,7 @@ tag:
   - Tier1
   - Tier1security
   - TierCandidatesFAIL
+  - ImageMode
 tier: '1'
 extra-summary: /CoreOS/clevis/Sanity/pkcs11/basic
 extra-task: /CoreOS/clevis/Sanity/pkcs11/basic
