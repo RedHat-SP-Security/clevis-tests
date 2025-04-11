@@ -383,6 +383,7 @@ __setup_10mt() {
   rlAssertRpm 10mt || rlDie "Cannot continue without 10mt"
   rlRun "yum -y install 10mt-redhat"
   rlAssertRpm 10mt-redhat || rlDie "Cannot continue without 10mt-redhat"
+  rlRun "dnf config-manager --set-disable epel" 0-1 "Disable epel if it's enabled"
 
   rlRun "semodule -i /usr/share/selinux/packages/10mt/policy10mt.pp" 0-1 "Attempt to load 10mt SELinux policy"
   rlRun -s "semodule -l"
