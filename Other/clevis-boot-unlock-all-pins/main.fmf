@@ -12,7 +12,6 @@ enabled: true
 tag:
   - NoTier
   - NestedVirt
-  - ImageMode
 adjust:
   - enabled: false
     when: distro < rhel-9
