@@ -11,6 +11,34 @@ log.level = DEBUG
 EOF
 }
 
+# This function generates a TLS cert based on the CRYPTO_ALG variable
+gen_tls_cert() {
+    local crypto_alg=$1
+    rlLog "Generating $crypto_alg TLS certificate..."
+    case "$crypto_alg" in
+        RSA)
+            rlRun "openssl req -x509 -newkey rsa:4096 -nodes \
+                -keyout server.key -out server.crt \
+                -subj \"/CN=localhost\" -days 365" 0 "Generating RSA TLS cert"
+            ;;
+        ECC | ECDSA)
+            rlRun "openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes \
+                -keyout server.key -out server.crt \
+                -subj \"/CN=localhost\" -days 365" 0 "Generating ECC TLS cert"
+            ;;
+        ML-DSA-65)
+            rlLog "Note: This requires OpenSSL compiled with a post-quantum provider (e.g., OQS) that supports 'mldsa65'."
+            rlRun "openssl req -x509 -newkey mldsa65 -nodes \
+                -keyout server.key -out server.crt \
+                -subj \"/CN=localhost\" -days 365" 0 "Generating ML-DSA-65 cert"
+            ;;
+        *)
+            rlLogFatal "Unsupported TLS algorithm: $CRYPTO_ALG. Use RSA, ECC, or ML-DSA-65."
+            exit 1
+            ;;
+    esac
+}
+
 install_softhsm() {
     # TODO: the test may only run on latest Feodra and RHEL>9 versions:
     #   https://issues.redhat.com/browse/RHEL-34856
@@ -65,4 +93,46 @@ create_token() {
 
         rlRun -l "pkcs11-tool -L --module=$SOFTHSM_LIB"
     rlPhaseEnd
+}
+
+# Starts the tangd process reliably and saves its PID for cleanup.
+start_tang_utils() {
+    local i= cache="$1" port="$2"
+    if [ -z "$port" ]; then
+        for i in {8000..8999}; do
+            # Use 'ss' for a more reliable check of listening ports
+            if ! ss -tlpn | grep -q ":$i\s"; then
+                port="$i"
+                break
+            fi
+        done
+    fi
+    if [ -z "$port" ]; then
+        rlLogFatal "no free port found for tangd"; return 1
+    fi
+    
+    # Added 'reuseaddr' to solve the TIME_WAIT issue
+    nohup socat "openssl-listen:$port,fork,reuseaddr,cert=server.crt,key=server.key,verify=0" \
+        exec:"/usr/libexec/tangd $cache" >/dev/null &
+
+
+    local pid=$!
+    # Save the PID for robust cleanup
+    echo "$pid" > tang.pid
+
+    rlWaitForSocket "$port" -p "$pid"
+    rlLogInfo "started tangd (TLS) $cache as pid $pid on port $port"
+    echo "$port"
+}
+
+# Stops the tangd process using its saved PID.
+stop_tang_utils() {
+    if [ -f tang.pid ]; then
+        rlRun "kill \$(cat tang.pid)" 0 "Stopping tangd process by PID"
+        rm tang.pid
+    else
+        # Fallback for safety, though it shouldn't be needed
+        rlLog "tang.pid not found. Stopping by port instead."
+        rlRun "fuser -s -k \"$1/tcp\""
+    fi
 }

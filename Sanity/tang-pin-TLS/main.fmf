@@ -1,0 +1,46 @@
+summary: tests the tang pin functionality of clevis with TLS connection
+component:
+  - tang
+  - clevis
+  - jose
+test: ./runtest.sh
+recommend:
+  - clevis
+  - tang
+  - socat
+  - expect
+  - psmisc
+  - curl
+  - coreutils
+  - openssl
+duration: 5m
+enabled: true
+tag:
+  - CI-Tier-1
+  - NoRHEL4
+  - NoRHEL5
+  - NoRHEL6
+  - TIPpass_Security
+  - Tier1
+  - Tier1security
+  - TierCandidatesPASS
+  - ImageMode
+tier: '1'
+adjust:
+  - enabled: false
+    when: distro == rhel-4, rhel-5, rhel-6
+    continue: false
+/ecdsa:
+    environment:
+        CRYPTO_ALG: ECDSA
+/rsa:
+    environment:
+        CRYPTO_ALG: RSA
+/pqc_alg:
+    environment:
+        CRYPTO_ALG: ML-DSA-65
+    continue: false
+    adjust+:
+      - enabled: false
+        when: distro < rhel-10.1 or distro < fedora-43
+        because: PQC is available from this version of OS
