@@ -44,10 +44,16 @@ DEBUG_VMS=${DEBUG_VMS:-}
 #    contain a list of VM-IDs, such as vmWaitForProvisioning 'VM1 VM2 VM2'
 # 5) At this point, the VM is ready and you can start and use it
 
+gen_tang_keys() {
+    rlRun "jose jwk gen -i '{\"alg\":\"ES512\"}' -o \"$1/sig.jwk\""
+    rlRun "jose jwk gen -i '{\"alg\":\"ECMR\"}' -o \"$1/exc.jwk\""
+}
+
 rlJournalStart
   rlPhaseStartSetup
     rlImport --all || rlDie "Import failed"
     rlRun "rlImport --all" 0 "Import libraries" || rlDie "cannot continue"
+    rlRun ". ../../TestHelpers/utils.sh" || rlDie "cannot import function script"
 
 : <<'EOF'
 #need to imported because pkcs11 implementation
@@ -79,11 +85,18 @@ EOF
     # added to the provisioned VM.
     rlLogInfo "EXTRA_VM_REPOS=${EXTRA_VM_REPOS}"
     rlRun -s "env"
-    rlFileSubmit "${rlRun_LOG}" "env.log"
-    rlServiceStart tangd.socket
-    rlServiceStatus tangd.socket
     TANG_IP=$(ip addr show $(ip route get 1 | awk '{print $5; exit}') | grep 'inet ' | awk '{print $2}' | cut -d/ -f1)
-
+    rlFileSubmit "${rlRun_LOG}" "env.log"
+    # Generate the certs needed by the start_tang_fn function
+    rlRun "gen_tls_cert ${CRYPTO_ALG} ${TANG_IP}" 0 "Generate TLS certificate"
+    rlRun "mkdir -p tangd/db"
+    gen_tang_keys "tangd/db"
+    # Start Tang using the socat utility and capture the port it's running on
+    TANG_PORT=$(start_tang_fn "tangd/db")
+    rlLog "Port: ${TANG_PORT}"
+    rlLog "IP: ${TANG_IP}"
+    # Verify Tang is responsive over TLS on the new dynamic port
+    rlRun "curl -k https://$TANG_IP:$TANG_PORT/adv" 0 "Verify Tang is responsive"
 : <<'EOF'
 #TODO
 #PKCS11 setup
@@ -146,8 +159,10 @@ EOF
 
     #maybe part of 10mt for future, now it is kinda workaround
     rlRun "cp clevis-boot-unlock-all-pins /usr/share/10mt/template/post/"
-
-    VM_ID="$(10mt -z -s ${SYSTEM} -k ~/.ssh/id_rsa.pub -a "${ADDR}" -t -x clevis-boot-unlock-all-pins -v TANG_SERVER=${TANG_IP})"
+    TANG_SERVER="$TANG_IP:$TANG_PORT"
+    rlLog "Address of tang server: $TANG_SERVER"
+    CERT_PATH=$(pwd)/server.crt
+    VM_ID="$(10mt -z -s ${SYSTEM} -k ~/.ssh/id_rsa.pub -a "${ADDR}" -t -x clevis-boot-unlock-all-pins -v TANG_SERVER=${TANG_SERVER} -f $CERT_PATH )"
     [ -n "${VM_ID}" ] || rlDie "Unable to get VM_ID; cannot continue"
 
     _compose="$(10mtctl compose "${VM_ID}")"
@@ -198,5 +213,6 @@ EOF
     # You can list the 10mt VMs with "10mtctl list".
     [ -z "${DEBUG_VMS}" ] && 10mt -A
     rlRun "rm -f /usr/share/10mt/template/post/clevis-boot-unlock-all-pins"
+    stop_tang_fn "$TANG_PORT"
   rlPhaseEnd
 rlJournalEnd
