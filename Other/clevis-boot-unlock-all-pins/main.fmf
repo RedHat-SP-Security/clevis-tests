@@ -7,6 +7,7 @@ require:
   - name: /Library/vm
     url: https://github.com/RedHat-SP-Security/clevis-tests
     type: library
+  - socat
 duration: 2h
 enabled: true
 tag:
@@ -20,3 +21,17 @@ adjust:
   - enabled: false
     when: arch != x86_64
     continue: false
+/ecdsa:
+    environment:
+        CRYPTO_ALG: ECDSA
+/rsa:
+    environment:
+        CRYPTO_ALG: RSA
+/pqc_alg:
+    environment:
+        CRYPTO_ALG: ML-DSA-65
+    continue: false
+    adjust+:
+      - enabled: false
+        when: distro < rhel-10.1 or distro < fedora-43
+        because: PQC is available from this version of OS

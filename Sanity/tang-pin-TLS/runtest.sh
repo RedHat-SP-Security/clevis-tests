@@ -67,11 +67,11 @@ rlJournalStart
             rlRun "mkdir -p tangd/db tangd/cache"
             gen_tang_keys "tangd/db"
             gen_tang_cache "tangd/db" "tangd/cache"
-            port=$(start_tang_utils "tangd/cache")
+            port=$(start_tang_fn "tangd/cache")
         else
             rlRun "mkdir -p tangd/db"
             gen_tang_keys "tangd/db"
-            port=$(start_tang_utils "tangd/db")
+            port=$(start_tang_fn "tangd/db")
         fi
     rlPhaseEnd
 
@@ -104,7 +104,7 @@ CLEVIS_END
     rlPhaseEnd
 
     rlPhaseStartCleanup
-        stop_tang_utils "$port"
+        stop_tang_fn "$port"
         rlRun "popd"
         untrust_cert
         rlRun "rm -r $TmpDir" 0 "Removing tmp directory"

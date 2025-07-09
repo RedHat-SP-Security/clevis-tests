@@ -14,23 +14,36 @@ EOF
 # This function generates a TLS cert based on the CRYPTO_ALG variable
 gen_tls_cert() {
     local crypto_alg=$1
+    # The second argument is the optional IP address
+    local ip_address=$2
+
     rlLog "Generating $crypto_alg TLS certificate..."
+
+    # Start building the Subject Alternative Name (SAN) options.
+    # The DNS name 'localhost' is always included.
+    local san_options="subjectAltName = DNS:localhost"
+
+    # If an IP address was provided, add it to the SAN options.
+    if [ -n "$ip_address" ]; then
+        san_options="$san_options,IP:$ip_address"
+        rlLog "Including IP SAN: $ip_address"
+    fi
+
+    local openssl_cmd_base="openssl req -x509 -nodes \
+        -keyout server.key -out server.crt \
+        -subj \"/CN=localhost\" -days 365 \
+        -addext \"$san_options\""
+
     case "$crypto_alg" in
         RSA)
-            rlRun "openssl req -x509 -newkey rsa:4096 -nodes \
-                -keyout server.key -out server.crt \
-                -subj \"/CN=localhost\" -days 365" 0 "Generating RSA TLS cert"
+            rlRun "$openssl_cmd_base -newkey rsa:4096"
             ;;
         ECC | ECDSA)
-            rlRun "openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes \
-                -keyout server.key -out server.crt \
-                -subj \"/CN=localhost\" -days 365" 0 "Generating ECC TLS cert"
+            rlRun "$openssl_cmd_base -newkey ec -pkeyopt ec_paramgen_curve:prime256v1"
             ;;
         ML-DSA-65)
             rlLog "Note: This requires OpenSSL compiled with a post-quantum provider (e.g., OQS) that supports 'mldsa65'."
-            rlRun "openssl req -x509 -newkey mldsa65 -nodes \
-                -keyout server.key -out server.crt \
-                -subj \"/CN=localhost\" -days 365" 0 "Generating ML-DSA-65 cert"
+            rlRun "$openssl_cmd_base -newkey mldsa65"
             ;;
         *)
             rlLogFatal "Unsupported TLS algorithm: $CRYPTO_ALG. Use RSA, ECC, or ML-DSA-65."
@@ -96,7 +109,7 @@ create_token() {
 }
 
 # Starts the tangd process reliably and saves its PID for cleanup.
-start_tang_utils() {
+start_tang_fn() {
     local i= cache="$1" port="$2"
     if [ -z "$port" ]; then
         for i in {8000..8999}; do
@@ -126,7 +139,7 @@ start_tang_utils() {
 }
 
 # Stops the tangd process using its saved PID.
-stop_tang_utils() {
+stop_tang_fn() {
     if [ -f tang.pid ]; then
         rlRun "kill \$(cat tang.pid)" 0 "Stopping tangd process by PID"
         rm tang.pid
