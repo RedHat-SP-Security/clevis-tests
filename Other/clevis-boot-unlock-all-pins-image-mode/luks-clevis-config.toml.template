@@ -49,3 +49,11 @@ device = { disk = "disk", partition = "boot" } # Assuming a boot partition named
 id = "bootfs"
 type = "ext4" # Common for /boot
 mountpoint = "/boot"
+
+[[post]]
+script = '''
+#!/bin/bash
+mkdir -p /var/lib/clevis-test-data
+echo "10.0.185.69" > /var/lib/clevis-test-data/tang_ip.txt
+chmod 644 /var/lib/clevis-test-data/tang_ip.txt
+'''
