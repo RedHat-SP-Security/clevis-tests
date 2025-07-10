@@ -31,6 +31,9 @@
 # Define variables for this test (only constants, dynamic values read from persistent storage)
 TANG_SERVER_PORT="8080" # Consistent port
 
+PERSISTENT_DATA_DIR="/var/lib/clevis-test-data" # Must match prepare script
+PERSISTENT_TANG_IP_FILE="${PERSISTENT_DATA_DIR}/tang_ip.txt"
+
 rlJournalStart
   rlPhaseStartSetup
     rlImport --all || rlDie "Import failed"
@@ -39,11 +42,9 @@ rlJournalStart
     rlLogInfo "SELinux: $(getenforce)"
 
     # SSH setup: ensure ~/.ssh/config is set up.
-    # The SSH keys themselves should already be present from bootc_test_prepare.
     rlRun "rlFileBackup --clean ~/.ssh/" 0 "Backup and clean ~/.ssh/"
     rlRun "mkdir -p ~/.ssh" 0 "Create ~/.ssh directory"
     rlRun "chmod 700 ~/.ssh" 0 "Set permissions for ~/.ssh"
-    # No ssh-keygen needed here, keys are assumed to be copied by orchestrator.
     rlRun "rm -f ~/.ssh/known_hosts" 0 "Remove known_hosts"
     cat << EOF > ~/.ssh/config
 Host *
@@ -55,8 +56,8 @@ EOF
     rlRun "chmod 600 ~/.ssh/config" 0 "Set permissions for ~/.ssh/config"
 
     # Get the Tang server IP from the file created by the 'prepare' phase.
-    TANG_IP=$(cat /var/tmp/clevis_tang_ip.txt 2>/dev/null)
-    rlAssertNotEquals "Tang server IP not found in /var/tmp/clevis_tang_ip.txt. Prepare phase failed?" "" "$TANG_IP"
+    TANG_IP=$(cat "${PERSISTENT_TANG_IP_FILE}" 2>/dev/null)
+    rlAssertNotEquals "Tang server IP not found in ${PERSISTENT_TANG_IP_FILE}. Prepare phase failed or file not persistent?" "" "$TANG_IP"
     rlLogInfo "Tang server for verification is at: ${TANG_IP}:${TANG_SERVER_PORT}"
 
   rlPhaseEnd
