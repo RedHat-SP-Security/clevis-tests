@@ -2,15 +2,15 @@
 # vim: dict+=/usr/share/beakerlib/dictionary.vim cpt=.,w,b,u,t,i,k
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 #
-#   runtest.sh of /clevis-tests/Other/tang-boot-unlock-all-pins
-#   Description: Test of clevis boot unlock via tang.
+#   runtest.sh of /clevis-tests/Otherl/tang-boot-unlock
+#   Description: Test of clevis boot unlock via tang and tpm2 for Image Mode testing (bootc/ostree).
 #   Author: Adam Prikryl <aprikryl@redhat.com>
 #
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 #
 #   Copyright (c) 2024 Red Hat, Inc.
 #
-#   This program is free software: you can redistribute it and/or
+#   This program is free software: you can redistribute and/or
 #   modify it under the terms of the GNU General Public License as
 #   published by the Free Software Foundation, either version 2 of
 #   the License, or (at your option) any later version.
@@ -28,193 +28,121 @@
 # Include Beaker environment
 . /usr/share/beakerlib/beakerlib.sh || exit 1
 
-# Define variables for image building and VM creation
-BOOTC_IMAGE_TAG="localhost:5000/clevis-bootc-test-image:latest" # Use a local registry for build/push
-VM_NAME="clevis-bootc-vm"
-VM_DISK_PATH="/var/lib/libvirt/images/${VM_NAME}.qcow2"
-VM_DISK_SIZE_GB=10
-SSH_KEY_PUB="${HOME}/.ssh/id_rsa.pub"
-SSH_KEY_PRIV="${HOME}/.ssh/id_rsa"
-TANG_IP="" # To be determined dynamically on the host
+# Define variables for this test
+TANG_SERVER_PORT="8080" # Default Tang port
+LUKS_INITIAL_PASSPHRASE="supersecretpassphrase" # MUST match the one used in luks-clevis-config.toml.template
+BOOTC_INSTALL_CONFIG_TEMPLATE="luks-clevis-config.toml.template"
+BOOTC_INSTALL_CONFIG_TARGET_FILENAME="10-luks-clevis.toml" # Name for the file inside the image at /usr/lib/bootc/install/
 
-# --- Helper functions for VM interaction (replaces vmCmd) ---
-# Assumes SSH_KEY_PRIV and VM_IP are set.
-vmCmd() {
-    local ip="$1"
-    shift
-    ssh -o StrictHostKeyChecking=no -i "${SSH_KEY_PRIV}" root@"${ip}" "$@"
-}
-
-# --- Function to build the bootc image with Clevis ---
-build_bootc_image() {
-    rlLogInfo "Building bootc-ostree image: ${BOOTC_IMAGE_TAG}"
-
-    local build_dir=$(mktemp -d)
-    trap "rm -rf ${build_dir}" EXIT # Ensure cleanup of temp directory
-
-    # Define the Containerfile content
-    # This Containerfile installs clevis and enables its systemd units.
-    # The actual LUKS encryption and clevis binding happen during 'bootc install to-disk'.
-    cat <<EOF > "${build_dir}/Containerfile"
-FROM registry.access.redhat.com/rhel9/rhel-bootc:latest
-# Alternatively, for Fedora: FROM fedora/fedora-bootc:latest
-
-# Install clevis and related packages
-RUN dnf install -y clevis clevis-luks clevis-dracut cryptsetup-luks && dnf clean all
-
-# Enable clevis systemd units for boot-time unlock
-RUN systemctl enable clevis-luks-askpass.path
-RUN systemctl enable clevis-luks-tang.path # If Tang is the primary method being tested
-# Note: For PKCS11, 'clevis-luks-pkcs11-askpass.socket' would also be relevant.
-
-# Basic init command
-CMD ["/sbin/init"]
-EOF
-
-    rlRun "podman build -t ${BOOTC_IMAGE_TAG} ${build_dir}" 0 "Building bootc image"
-    rlRun "podman push ${BOOTC_IMAGE_TAG}" 0 "Pushing image to local registry"
-}
-
-# --- Function to deploy the bootc image to a VM ---
-deploy_bootc_to_vm() {
-    rlLogInfo "Deploying bootc image to VM: ${VM_NAME}"
-
-    # Clean up previous VM and disk if they exist
-    rlRun "virsh destroy ${VM_NAME}" || :
-    rlRun "virsh undefine ${VM_NAME} --nvram" || :
-    rlRun "rm -f ${VM_DISK_PATH}" || :
-
-    # Create the target disk image for bootc install
-    rlRun "qemu-img create -f qcow2 ${VM_DISK_PATH} ${VM_DISK_SIZE_GB}G" 0 "Creating VM disk for bootc install"
-
-    # Install the bootc image onto the disk, performing LUKS encryption and Clevis binding
-    # IMPORTANT: Ensure 'bootc' command is available on the host.
-    rlLogInfo "Running 'bootc install to-disk' with LUKS and Clevis Tang binding."
-    rlRun "bootc install to-disk \
-           --target-img ${VM_DISK_PATH} \
-           --keyfile ${SSH_KEY_PUB} \
-           --username root \
-           --root-encryption luks \
-           --clevis-tang-url 'http://${TANG_IP}' \
-           ${BOOTC_IMAGE_TAG}" \
-           0 "Installing bootc image to disk with LUKS and Clevis"
-
-    # Define OS variant based on host OS for virt-install
-    local OS_VARIANT
-    if rlIsFedora; then
-        OS_VARIANT="fedora$(grep VERSION_ID /etc/os-release | cut -d'=' -f2 | tr -d '"')"
-    elif rlIsRHEL; then
-        OS_VARIANT="rhel$(grep VERSION_ID /etc/os-release | cut -d'=' -f2 | tr -d '"').0" # E.g., rhel9.0
-    else
-        OS_VARIANT="linux" # Fallback
-    fi
-
-    # Create and start the VM using virt-install
-    rlRun "virt-install \
-           --name ${VM_NAME} \
-           --ram 2048 \
-           --vcpus 2 \
-           --disk path=${VM_DISK_PATH},bus=virtio \
-           --os-variant ${OS_VARIANT} \
-           --network default,model=virtio \
-           --import \
-           --noautoconsole \
-           --graphics none" 0 "Creating and starting VM from bootc image"
-
-    # Get VM IP address
-    VM_IP=""
-    for i in $(seq 1 60); do # Wait up to 10 minutes for IP
-        VM_IP=$(virsh domifaddr ${VM_NAME} | grep ipv4 | awk '{print $4}' | cut -d/ -f1)
-        if [ -n "${VM_IP}" ]; then
-            rlLogInfo "VM IP: ${VM_IP}"
-            break
-        fi
-        rlLogInfo "Waiting for VM IP... (attempt ${i}/60)"
-        sleep 10
-    done
-    [ -n "${VM_IP}" ] || rlDie "Could not get VM IP address"
-
-    # Wait for SSH to be available
-    for i in $(seq 1 30); do # Wait up to 5 minutes for SSH
-        if ssh -o StrictHostKeyChecking=no -i "${SSH_KEY_PRIV}" root@"${VM_IP}" "true" &>/dev/null; then
-            rlLogInfo "SSH connection to VM successful."
-            break
-        fi
-        rlLogInfo "Waiting for SSH on ${VM_IP}... (attempt ${i}/30)"
-        sleep 10
-    done
-    ssh -o StrictHostKeyChecking=no -i "${SSH_KEY_PRIV}" root@"${VM_IP}" "true" || rlDie "Failed to SSH to VM"
-
-    export VM_IP # Make VM_IP available globally for vmCmd
-}
+# Note: The `vm.sh` library is often used in Beakerlib for `__setup_ssh` etc.
+# Ensure it's sourced if your Beakerlib environment doesn't load it by default.
+# For Beakerlib environments, `rlImport --all` usually covers common helper libraries.
+# If __setup_ssh is not found, you'd need to provide it (basic ssh-keygen).
 
 rlJournalStart
   rlPhaseStartSetup
-    rlImport --all || rlDie "Import failed to import Beakerlib libraries"
+    rlImport --all || rlDie "Import failed"
+    rlRun "rlImport --all" 0 "Import libraries" || rlDie "cannot continue"
 
-    # Ensure SSH key exists for VM access
-    if [ ! -f "${SSH_KEY_PRIV}" ]; then
-      rlRun "ssh-keygen -t rsa -b 2048 -f ${SSH_KEY_PRIV} -N ''" 0 "Generating SSH key pair"
-    fi
-    rlAssertExists "${SSH_KEY_PUB}" "Public SSH key must exist"
+    rlLogInfo "SELinux: $(getenforce)"
 
-    # Set SELinux to permissive if requested (host only)
-    rlLogInfo "DISABLE_SELINUX(${DISABLE_SELINUX})"
-    if [ -n "${DISABLE_SELINUX}" ]; then
-      rlRun "setenforce 0" 0 "Putting SELinux in Permissive mode on host"
-    fi
-    rlLogInfo "Host SELinux: $(getenforce)"
+    # Ensure SSH keys are set up on the test host for consistent test environment.
+    # The `bootc_test_prepare` copies .ssh, so this ensures it's there.
+    # This might also be useful for 'ssh' commands if you debug.
+    __setup_ssh || rlDie "Failed to set up SSH keys"
 
-    # Start Tang server on the host
-    rlLogInfo "Starting Tang server on host."
-    rlRun "systemctl start tangd.socket" 0 "Starting tangd.socket"
-    rlRun "systemctl status tangd.socket" 0 "Checking tangd.socket status"
+    # Start Tang server on the test host.
+    # This Tang server will be accessed by `bootc install` during the "pre-reboot phase"
+    # to bind the Clevis Tang pin to the LUKS device.
+    rlLogInfo "Starting Tang server on host for bootc installation."
+    rlRun "sudo systemctl enable --now tangd.socket" 0 "Enable and start tangd.socket"
+    rlRun "sudo systemctl status tangd.socket" 0 "Check tangd.socket status"
     TANG_IP=$(ip addr show $(ip route get 1 | awk '{print $5; exit}') | grep 'inet ' | awk '{print $2}' | cut -d/ -f1)
-    rlAssertNotEquals "Tang IP should not be empty" "" "${TANG_IP}"
-    rlLogInfo "Tang Server IP: ${TANG_IP}"
+    rlAssertNotEquals "Tang server IP must not be empty" "" "$TANG_IP"
+    rlLogInfo "Tang server running at: ${TANG_IP}:${TANG_SERVER_PORT}"
 
-    # Build the custom bootc image with Clevis
-    build_bootc_image
-    rlAssertExists "$(podman image exists ${BOOTC_IMAGE_TAG} && echo true)" "Bootc image should be built"
+    # Prepare the `bootc-install-config.toml` file.
+    # This file will be copied into the `bootc` image during its build,
+    # and then processed by `bootc install` to configure LUKS and Clevis.
+    rlLogInfo "Preparing bootc install config file: ${BOOTC_INSTALL_CONFIG_FILENAME}"
+    rlRun "cp ${BOOTC_INSTALL_CONFIG_TEMPLATE} ${BOOTC_INSTALL_CONFIG_FILENAME}" 0 "Copy bootc install config template"
+    # Substitute dynamic values into the TOML file
+    rlRun "sed -i 's|\${TANG_SERVER}|${TANG_IP}|g' ${BOOTC_INSTALL_CONFIG_FILENAME}" 0 "Substitute TANG_IP in install config"
+    rlRun "sed -i 's|\${TANG_SERVER_PORT}|${TANG_SERVER_PORT}|g' ${BOOTC_INSTALL_CONFIG_FILENAME}" 0 "Substitute TANG_SERVER_PORT in install config"
+    rlRun "sed -i 's|\${LUKS_INITIAL_PASSPHRASE}|${LUKS_INITIAL_PASSPHRASE}|g' ${BOOTC_INSTALL_CONFIG_FILENAME}" 0 "Substitute initial LUKS passphrase in install config"
+    rlFileSubmit "${BOOTC_INSTALL_CONFIG_FILENAME}" "${BOOTC_INSTALL_CONFIG_FILENAME}" # Make it available in tmt's artifacts/test directory for copying by BOOTC_RUN_CMD
 
-    # Deploy the image to a new VM and configure Clevis unlock
-    deploy_bootc_to_vm
-    rlAssertNotEquals "VM_IP should not be empty after deployment" "" "${VM_IP}"
+    # Set environment variables that the `bootc_test_prepare` orchestrator will read.
+
+    # 1. BOOTC_INSTALL_PACKAGES: Essential Clevis/LUKS/TPM tools installed *into the image*.
+    export BOOTC_INSTALL_PACKAGES="clevis clevis-luks luksmeta tang expect socat psmisc curl softhsm opensc jose cryptsetup openssl git python3-pip clevis-pin-pkcs11 python-pip libjose-devel cryptsetup-devel tpm2-tools libluksmeta-devel"
+
+    # 2. BOOTC_RUN_CMD: Command to be run *inside the Containerfile build*.
+    # This command copies our templated `luks-clevis-config.toml` into
+    # `/usr/lib/bootc/install/` within the image's filesystem.
+    # The `bootc_test_prepare` script copies the entire tmt run directory (which includes our test dir and its files)
+    # into its build context, typically under `/var/tmp/tmt/run-.../path/to/my/test/`.
+    # So, `cp ${BOOTC_INSTALL_CONFIG_FILENAME}` from the current Containerfile build context
+    # correctly refers to our file.
+    export BOOTC_RUN_CMD="mkdir -p /usr/lib/bootc/install && cp ${BOOTC_INSTALL_CONFIG_FILENAME} /usr/lib/bootc/install/${BOOTC_INSTALL_CONFIG_FILENAME} && chmod 644 /usr/lib/bootc/install/${BOOTC_INSTALL_CONFIG_FILENAME}"
+
+    # 3. BOOTC_KERNEL_ARGS: Ensure `rd.neednet=1` for network access early in boot.
+    export BOOTC_KERNEL_ARGS='["rd.neednet=1"]'
+
+    rlLogInfo "Environment variables set for `bootc_test_prepare` orchestrator:"
+    rlRun "env | grep BOOTC_"
+
+    # No explicit `bootc build` or `bootc install` here.
+    # These actions are handled by the `bootc_test_prepare` script based on the
+    # environment variables we've just exported.
 
   rlPhaseEnd
 
-  rlPhaseStartTest "Clevis Unlock Verification on Image Mode VM"
+  rlPhaseStartTest "Verify Boot Unlock (Post-Reboot)"
+    # This phase runs AFTER the system has rebooted into the newly installed
+    # `bootc` image, which should now have LUKS and Clevis configured.
 
-    # Verify Clevis unlock via journalctl in the VM
-    rlLogInfo "Checking journalctl in VM for clevis unlock messages"
+    # Ensure TPM device is present on the booted system.
+    rlRun "ls /dev/tpm0" 0 "Verify TPM device exists on the booted system"
+
+    # Verify journalctl for successful LUKS decryption and Clevis askpass deactivation.
     if rlIsRHELLike '>=10'; then
-      rlRun "vmCmd ${VM_IP} journalctl -b | grep \"Finished systemd-cryptsetup\"" 0 "Verify systemd-cryptsetup finished in VM"
+      rlRun "journalctl -b | grep \"Finished systemd-cryptsetup\"" 0 "Verify systemd-cryptsetup finished"
     else
-      rlRun "vmCmd ${VM_IP} journalctl -b | grep \"Finished Cryptography Setup for luks-\"" 0 "Verify Cryptography Setup finished in VM"
-      rlRun "vmCmd ${VM_IP} journalctl -b | grep \"clevis-luks-askpass.service: Deactivated successfully\"" 0 "Verify clevis-luks-askpass deactivated in VM"
+      rlRun "journalctl -b | grep \"Finished Cryptography Setup for luks-\"" 0 "Verify Cryptography Setup finished"
+      rlRun "journalctl -b | grep \"clevis-luks-askpass.service: Deactivated successfully\"" 0 "Verify clevis-luks-askpass deactivated"
     fi
 
-    # Further checks: verify that the root device is indeed unlocked by clevis
-    # Get the root device in the VM (e.g., /dev/vda3 or /dev/vda2)
-    ROOT_DEV=$(vmCmd ${VM_IP} findmnt -n -o SOURCE /)
-    rlLogInfo "Root device in VM: ${ROOT_DEV}"
-    # Verify Clevis is reported as a key protector
-    rlRun "vmCmd ${VM_IP} cryptsetup luksDump ${ROOT_DEV} | grep -q 'Clevis'" 0 "Verify Clevis is bound to LUKS header on root device"
+    # Verify that the root filesystem is indeed mounted via LUKS.
+    # The `luks-clevis-config.toml` will create a LUKS volume on /dev/vda (or specified disk).
+    # Assuming the root partition is /dev/vda2 (common for OS installs on a single disk).
+    rlRun "lsblk -no FSTYPE,MOUNTPOINT,ROUTEPATH | grep 'crypto_LUKS / /dev/mapper/root'" 0 "Verify root is LUKS-mounted"
+    rlRun "sudo cryptsetup status root | grep 'cipher: aes-cbc-essiv:sha256'" 0 "Verify LUKS cipher"
+    rlRun "sudo cryptsetup status root | grep 'active one key slot'" 0 "Verify LUKS active key slot (by Clevis)"
+    # IMPORTANT: Adjust /dev/vda2 if your actual root partition device node differs.
+    # You might need to add a step to dynamically determine the root LUKS device,
+    # e.g., `ROOT_LUKS_DEV=$(lsblk -no PKNAME $(findmnt -no SOURCE / | cut -d'[' -f1) | grep -E '^sd[a-z][0-9]+|^nvme[0-9]+n[0-9]+p[0-9]+')`
+    rlRun "sudo clevis luks list /dev/vda2 | grep 'tang' | grep 'tpm2' | grep 't=2'" 0 "Verify Clevis binding is present on /dev/vda2"
+
+    # Verify Tang server reachability from the *booted system*.
+    # This confirms network connectivity and successful interaction with Tang.
+    rlLogInfo "Verifying Tang server reachability from the booted system..."
+    # Use the TANG_IP (which was captured in setup) of the system where Tang is running.
+    # This assumes the test host's IP is reachable from the *newly booted* bootc system.
+    rlRun "curl -sfg http://${TANG_IP}:${TANG_SERVER_PORT}/adv -o /tmp/adv.jws" 0 "Download Tang advertisement from booted system"
+    rlFileExists "/tmp/adv.jws" || rlDie "Tang advertisement not downloaded on booted system"
 
   rlPhaseEnd
 
   rlPhaseStartCleanup
-    rlLogInfo "Cleaning up VM and image artifacts"
+    # Stop Tang server on the host (where this script originally ran and where the bootc install connected to it).
+    rlRun "sudo systemctl stop tangd.socket" 0-1 "Stop tangd.socket"
+    rlRun "sudo systemctl disable tangd.socket" 0-1 "Disable tangd.socket"
 
-    # Stop and remove the VM
-    rlRun "virsh destroy ${VM_NAME}" || :
-    rlRun "virsh undefine ${VM_NAME} --nvram" || :
-    rlRun "rm -f ${VM_DISK_PATH}" || :
+    # Clean up the generated install config file.
+    rlRun "rm -f ${BOOTC_INSTALL_CONFIG_FILENAME}" 0-1 "Remove generated bootc install config"
 
-    # Remove the built bootc image from local registry and local storage
-    rlRun "podman rmi -f ${BOOTC_IMAGE_TAG}" || :
-
-    # Stop Tang server
-    rlRun "systemctl stop tangd.socket" || :
+    # No other cleanup needed, as the `bootc_test_prepare` orchestrator handles
+    # resetting the test system for subsequent tests (e.g., re-imaging).
   rlPhaseEnd
 rlJournalEnd

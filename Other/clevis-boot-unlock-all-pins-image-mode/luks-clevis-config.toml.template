@@ -1,0 +1,51 @@
+# luks-clevis-config.toml.template
+# This file will be copied into /usr/lib/bootc/install/10-luks-clevis.toml
+# and processed by bootc install during the image deployment.
+
+[[storage.devices]]
+id = "disk"
+path = "/dev/vda" # IMPORTANT: Adjust this if the primary disk is not /dev/vda (e.g., /dev/nvme0n1)
+wipe = true # WARNING: This will wipe the target disk! Be careful in real environments.
+
+[[storage.disks]]
+id = "disk"
+device = "disk"
+wipe = true
+ptable = "gpt"
+
+# Define the root LUKS volume
+[[storage.volumes]]
+name = "root"
+id = "rootvol"
+encryption = "luks2"
+cipher = "aes-cbc-essiv:sha256"
+# Initial passphrase for LUKS. `bootc install` needs this to create the LUKS volume,
+# but Clevis will then add its own keyslot and this one can potentially be removed.
+passphrase = "${LUKS_INITIAL_PASSPHRASE}"
+
+# Define the Clevis binding within the LUKS volume
+[[storage.volumes.clevis_pin]]
+type = "sss"
+threshold = 2
+[[storage.volumes.clevis_pin.config]]
+type = "tang"
+url = "http://${TANG_SERVER}:${TANG_SERVER_PORT}" # Use variable placeholders
+advertisement = "DYNAMIC" # bootc will fetch this at install time from the provided URL
+[[storage.volumes.clevis_pin.config]]
+type = "tpm2"
+pcr_bank = "sha256"
+pcr_ids = "0,7" # PCRs 0 (SRTM) and 7 (Secure Boot State)
+
+# Define filesystems
+[[storage.filesystems]]
+device = { volume = "rootvol" }
+id = "rootfs"
+type = "xfs" # Or ext4, depends on bootc base image defaults or preference
+mountpoint = "/"
+
+# Assuming a separate /boot partition
+[[storage.filesystems]]
+device = { disk = "disk", partition = "boot" } # Assuming a boot partition named 'boot' in GPT
+id = "bootfs"
+type = "ext4" # Common for /boot
+mountpoint = "/boot"
