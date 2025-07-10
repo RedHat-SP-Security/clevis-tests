@@ -46,10 +46,19 @@ rlJournalStart
 
     rlLogInfo "SELinux: $(getenforce)"
 
-    # Ensure SSH keys are set up on the test host for consistent test environment.
-    # The `bootc_test_prepare` copies .ssh, so this ensures it's there.
-    # This might also be useful for 'ssh' commands if you debug.
-    __setup_ssh || rlDie "Failed to set up SSH keys"
+      rlRun "rlFileBackup --clean ~/.ssh/"
+      mkdir -p ~/.ssh
+      chmod 700 ~/.ssh
+      ssh-keygen -q -t rsa -b 4096 -N '' -f ~/.ssh/id_rsa <<< y 2>&1 >/dev/null
+      rm -f ~/.ssh/known_hosts
+      cat << EOF > ~/.ssh/config
+Host *
+  user root
+  StrictHostKeyChecking no
+  UserKnownHostsFile /dev/null
+  LogLevel QUIET
+EOF
+      chmod 600 ~/.ssh/config
 
     # Start Tang server on the test host.
     # This Tang server will be accessed by `bootc install` during the "pre-reboot phase"
