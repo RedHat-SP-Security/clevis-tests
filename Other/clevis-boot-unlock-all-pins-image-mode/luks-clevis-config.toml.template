@@ -1,3 +1,6 @@
+variant = "fcos"
+version = "1.5.0"
+
 [[storage.devices]]
 id = "disk"
 path = "/dev/vda"
@@ -16,15 +19,15 @@ encryption = "luks2"
 cipher = "aes-cbc-essiv:sha256"
 passphrase = "${LUKS_INITIAL_PASSPHRASE}"
 
-[[storage.volumes.clevis_pin]]
-type = "sss"
+[storage.volumes.clevis]
+pin = "sss"
 threshold = 2
-[[storage.volumes.clevis_pin.config]]
-type = "tang"
+
+[[storage.volumes.clevis.tang]]
 url = "http://${TANG_SERVER}:${TANG_SERVER_PORT}"
 advertisement = "DYNAMIC"
-[[storage.volumes.clevis_pin.config]]
-type = "tpm2"
+
+[storage.volumes.clevis.tpm2]
 pcr_bank = "sha256"
 pcr_ids = "0,7"
 
@@ -39,19 +42,3 @@ device = { disk = "disk", partition = "boot" }
 id = "bootfs"
 type = "ext4"
 mountpoint = "/boot"
-
-[[systemd.units]]
-name = "clevis-write-tang-ip.service"
-enabled = true
-contents = """
-[Unit]
-Description=Write Tang server IP to persistent test location
-After=network.target
-
-[Service]
-Type=oneshot
-ExecStart=/bin/bash -c 'mkdir -p /etc/clevis-test-data && echo "10.0.185.69" > /etc/clevis-test-data/tang_ip.txt && chmod 644 /etc/clevis-test-data/tang_ip.txt'
-
-[Install]
-WantedBy=multi-user.target
-"""
