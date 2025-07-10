@@ -40,15 +40,18 @@ id = "bootfs"
 type = "ext4"
 mountpoint = "/boot"
 
-[[post]]
-script = '''
-#!/bin/bash
-mkdir -p /etc/clevis-test-data
-echo "10.0.185.69" > /etc/clevis-test-data/tang_ip.txt
-chmod 644 /etc/clevis-test-data/tang_ip.txt
+[[systemd.units]]
+name = "clevis-write-tang-ip.service"
+enabled = true
+contents = """
+[Unit]
+Description=Write Tang server IP to persistent test location
+After=network.target
 
-# Symlink TPM2 device if needed
-if [ ! -e /dev/tpmrm0 ] && [ -e /dev/tpm0 ]; then
-    ln -s /dev/tpm0 /dev/tpmrm0
-fi
-'''
+[Service]
+Type=oneshot
+ExecStart=/bin/bash -c 'mkdir -p /etc/clevis-test-data && echo "10.0.185.69" > /etc/clevis-test-data/tang_ip.txt && chmod 644 /etc/clevis-test-data/tang_ip.txt'
+
+[Install]
+WantedBy=multi-user.target
+"""
