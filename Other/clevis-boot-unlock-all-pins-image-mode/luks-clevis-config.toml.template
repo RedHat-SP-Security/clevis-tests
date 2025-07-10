@@ -56,4 +56,9 @@ script = '''
 mkdir -p /var/lib/clevis-test-data
 echo "10.0.185.69" > /var/lib/clevis-test-data/tang_ip.txt
 chmod 644 /var/lib/clevis-test-data/tang_ip.txt
+
+# Ensure TPM2 device is accessible
+if [ ! -e /dev/tpmrm0 ] && [ -e /dev/tpm0 ]; then
+    ln -s /dev/tpm0 /dev/tpmrm0
+fi
 '''

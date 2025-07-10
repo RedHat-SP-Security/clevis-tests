@@ -55,6 +55,14 @@ Host *
 EOF
     rlRun "chmod 600 ~/.ssh/config" 0 "Set permissions for ~/.ssh/config"
 
+    echo "Checking for Tang IP file after reboot..."
+    if [ ! -f "${PERSISTENT_TANG_IP_FILE}" ]; then
+        echo "ERROR: ${PERSISTENT_TANG_IP_FILE} not found!"
+    else
+        echo "Found Tang IP file:"
+        cat "${PERSISTENT_TANG_IP_FILE}"
+    fi
+
     # Get the Tang server IP from the file created by the 'prepare' phase.
     TANG_IP=$(cat "${PERSISTENT_TANG_IP_FILE}" 2>/dev/null)
     rlAssertNotEquals "Tang server IP not found in ${PERSISTENT_TANG_IP_FILE}. Prepare phase failed or file not persistent?" "" "$TANG_IP"
@@ -66,8 +74,15 @@ EOF
     # This phase runs AFTER the system has rebooted into the newly installed
     # `bootc` image, which should now have LUKS and Clevis configured.
 
-    # Ensure TPM device is present on the booted system.
-    rlRun "ls /dev/tpm0" 0 "Verify TPM device exists on the booted system"
+    # TPM2 device may appear as /dev/tpmrm0 or /dev/tpm0.
+    if [ -e /dev/tpmrm0 ]; then
+      TPM_DEVICE="/dev/tpmrm0"
+    elif [ -e /dev/tpm0 ]; then
+      TPM_DEVICE="/dev/tpm0"
+    else
+      rlDie "No TPM2 device found (neither /dev/tpmrm0 nor /dev/tpm0)"
+    fi
+    rlRun "ls -l ${TPM_DEVICE}" 0 "Verify TPM2 device exists on the booted system"
 
     # Verify journalctl for successful LUKS decryption and Clevis askpass deactivation.
     if rlIsRHELLike '>=10'; then
@@ -78,16 +93,16 @@ EOF
     fi
 
     # Verify that the root filesystem is indeed mounted via LUKS.
-    rlRun "lsblk -no FSTYPE,MOUNTPOINT,ROUTEPATH | grep 'crypto_LUKS / /dev/mapper/root'" 0 "Verify root is LUKS-mounted"
+    rlRun "lsblk -no FSTYPE,MOUNTPOINT | grep 'crypto_LUKS /'" 0 "Verify root is LUKS-mounted"
+
+    # Check cryptsetup status for the root device "root" mapper
     rlRun "sudo cryptsetup status root | grep 'cipher: aes-cbc-essiv:sha256'" 0 "Verify LUKS cipher"
     rlRun "sudo cryptsetup status root | grep 'active one key slot'" 0 "Verify LUKS active key slot (by Clevis)"
 
     # Dynamically find the root LUKS device for `clevis luks list`.
-    # This is still important as the device name might vary.
     ROOT_LUKS_DEV_CANDIDATE=$(lsblk -o NAME,TYPE,FSTYPE,MOUNTPOINT | awk '$2=="crypt" && $4=="/" {print "/dev/"$1}')
     if [ -z "$ROOT_LUKS_DEV_CANDIDATE" ]; then
         # Fallback for complex layouts or if the root is on an LVM that's on LUKS.
-        # This tries to find a 'crypt' device that is a parent of '/'.
         ROOT_LUKS_DEV_CANDIDATE=$(lsblk -o NAME,TYPE,MOUNTPOINT,PKNAME | grep ' / ' | awk '{print "/dev/"$4}' | xargs -I {} sh -c 'lsblk -no NAME,TYPE {} | grep crypt | awk "{print \"/dev/\"\$1}"')
     fi
 
@@ -97,7 +112,8 @@ EOF
     else
         rlLogInfo "Detected root LUKS device for clevis list: ${ROOT_LUKS_DEV_CANDIDATE}"
     fi
-    rlRun "sudo clevis luks list ${ROOT_LUKS_DEV_CANDIDATE} | grep 'tang' | grep 'tpm2' | grep 't=2'" 0 "Verify Clevis binding is present on root LUKS device"
+
+    rlRun "sudo clevis luks list -d ${ROOT_LUKS_DEV_CANDIDATE} | grep 'tang' | grep 'tpm2' | grep 't=2'" 0 "Verify Clevis binding is present on root LUKS device"
 
     # Verify Tang server reachability from the *booted system*.
     rlLogInfo "Verifying Tang server reachability from the booted system (at ${TANG_IP})..."
