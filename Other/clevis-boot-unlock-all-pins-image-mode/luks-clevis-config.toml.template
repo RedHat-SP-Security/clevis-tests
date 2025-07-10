@@ -1,11 +1,7 @@
-# luks-clevis-config.toml.template
-# This file defines the storage and LUKS/Clevis configuration
-# to be processed by bootc install.
-
 [[storage.devices]]
 id = "disk"
-path = "/dev/vda" # IMPORTANT: Adjust this if the primary disk is not /dev/vda (e.g., /dev/nvme0n1)
-wipe = true # WARNING: This will wipe the target disk! Be careful in real environments.
+path = "/dev/vda"
+wipe = true
 
 [[storage.disks]]
 id = "disk"
@@ -13,51 +9,45 @@ device = "disk"
 wipe = true
 ptable = "gpt"
 
-# Define the root LUKS volume
 [[storage.volumes]]
 name = "root"
 id = "rootvol"
 encryption = "luks2"
 cipher = "aes-cbc-essiv:sha256"
-# Initial passphrase for LUKS. `bootc install` needs this to create the LUKS volume,
-# but Clevis will then add its own keyslot and this one can potentially be removed.
 passphrase = "${LUKS_INITIAL_PASSPHRASE}"
 
-# Define the Clevis binding within the LUKS volume
 [[storage.volumes.clevis_pin]]
 type = "sss"
 threshold = 2
 [[storage.volumes.clevis_pin.config]]
 type = "tang"
-url = "http://${TANG_SERVER}:${TANG_SERVER_PORT}" # Use variable placeholders
-advertisement = "DYNAMIC" # bootc will fetch this at install time from the provided URL
+url = "http://${TANG_SERVER}:${TANG_SERVER_PORT}"
+advertisement = "DYNAMIC"
 [[storage.volumes.clevis_pin.config]]
 type = "tpm2"
 pcr_bank = "sha256"
-pcr_ids = "0,7" # PCRs 0 (SRTM) and 7 (Secure Boot State)
+pcr_ids = "0,7"
 
-# Define filesystems
 [[storage.filesystems]]
 device = { volume = "rootvol" }
 id = "rootfs"
-type = "xfs" # Or ext4, depends on bootc base image defaults or preference
+type = "xfs"
 mountpoint = "/"
 
-# Assuming a separate /boot partition
 [[storage.filesystems]]
-device = { disk = "disk", partition = "boot" } # Assuming a boot partition named 'boot' in GPT
+device = { disk = "disk", partition = "boot" }
 id = "bootfs"
-type = "ext4" # Common for /boot
+type = "ext4"
 mountpoint = "/boot"
 
 [[post]]
 script = '''
 #!/bin/bash
-mkdir -p /var/lib/clevis-test-data
-echo "10.0.185.69" > /var/lib/clevis-test-data/tang_ip.txt
-chmod 644 /var/lib/clevis-test-data/tang_ip.txt
+mkdir -p /etc/clevis-test-data
+echo "10.0.185.69" > /etc/clevis-test-data/tang_ip.txt
+chmod 644 /etc/clevis-test-data/tang_ip.txt
 
-# Ensure TPM2 device is accessible
+# Symlink TPM2 device if needed
 if [ ! -e /dev/tpmrm0 ] && [ -e /dev/tpm0 ]; then
     ln -s /dev/tpm0 /dev/tpmrm0
 fi
