@@ -2,6 +2,9 @@ summary: Test of clevis boot unlock via all possible pins (tang, tpm2) and using
 contact: Patrik Koncity <pkoncity@redhat.com>
 test: ./runtest.sh
 require:
+  - name: /Library/vm
+    url: https://github.com/RedHat-SP-Security/clevis-tests
+    type: library
   - clevis
   - tang
   - podman
