@@ -1,6 +1,6 @@
 # luks-clevis-config.toml.template
-# This file will be copied into /usr/lib/bootc/install/10-luks-clevis.toml
-# and processed by bootc install during the image deployment.
+# This file defines the storage and LUKS/Clevis configuration
+# to be processed by bootc install.
 
 [[storage.devices]]
 id = "disk"

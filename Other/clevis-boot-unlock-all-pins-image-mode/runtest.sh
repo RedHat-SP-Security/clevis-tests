@@ -28,16 +28,8 @@
 # Include Beaker environment
 . /usr/share/beakerlib/beakerlib.sh || exit 1
 
-# Define variables for this test
-TANG_SERVER_PORT="8080" # Default Tang port
-LUKS_INITIAL_PASSPHRASE="supersecretpassphrase" # MUST match the one used in luks-clevis-config.toml.template
-BOOTC_INSTALL_CONFIG_TEMPLATE="luks-clevis-config.toml.template"
-BOOTC_INSTALL_CONFIG_TARGET_FILENAME="10-luks-clevis.toml" # Name for the file inside the image at /usr/lib/bootc/install/
-
-# Note: The `vm.sh` library is often used in Beakerlib for `__setup_ssh` etc.
-# Ensure it's sourced if your Beakerlib environment doesn't load it by default.
-# For Beakerlib environments, `rlImport --all` usually covers common helper libraries.
-# If __setup_ssh is not found, you'd need to provide it (basic ssh-keygen).
+# Define variables for this test (only constants, dynamic values read from persistent storage)
+TANG_SERVER_PORT="8080" # Consistent port
 
 rlJournalStart
   rlPhaseStartSetup
@@ -46,64 +38,26 @@ rlJournalStart
 
     rlLogInfo "SELinux: $(getenforce)"
 
-      rlRun "rlFileBackup --clean ~/.ssh/"
-      mkdir -p ~/.ssh
-      chmod 700 ~/.ssh
-      ssh-keygen -q -t rsa -b 4096 -N '' -f ~/.ssh/id_rsa <<< y 2>&1 >/dev/null
-      rm -f ~/.ssh/known_hosts
-      cat << EOF > ~/.ssh/config
+    # SSH setup: ensure ~/.ssh/config is set up.
+    # The SSH keys themselves should already be present from bootc_test_prepare.
+    rlRun "rlFileBackup --clean ~/.ssh/" 0 "Backup and clean ~/.ssh/"
+    rlRun "mkdir -p ~/.ssh" 0 "Create ~/.ssh directory"
+    rlRun "chmod 700 ~/.ssh" 0 "Set permissions for ~/.ssh"
+    # No ssh-keygen needed here, keys are assumed to be copied by orchestrator.
+    rlRun "rm -f ~/.ssh/known_hosts" 0 "Remove known_hosts"
+    cat << EOF > ~/.ssh/config
 Host *
   user root
   StrictHostKeyChecking no
   UserKnownHostsFile /dev/null
   LogLevel QUIET
 EOF
-      chmod 600 ~/.ssh/config
+    rlRun "chmod 600 ~/.ssh/config" 0 "Set permissions for ~/.ssh/config"
 
-    # Start Tang server on the test host.
-    # This Tang server will be accessed by `bootc install` during the "pre-reboot phase"
-    # to bind the Clevis Tang pin to the LUKS device.
-    rlLogInfo "Starting Tang server on host for bootc installation."
-    rlRun "sudo systemctl enable --now tangd.socket" 0 "Enable and start tangd.socket"
-    rlRun "sudo systemctl status tangd.socket" 0 "Check tangd.socket status"
-    TANG_IP=$(ip addr show $(ip route get 1 | awk '{print $5; exit}') | grep 'inet ' | awk '{print $2}' | cut -d/ -f1)
-    rlAssertNotEquals "Tang server IP must not be empty" "" "$TANG_IP"
-    rlLogInfo "Tang server running at: ${TANG_IP}:${TANG_SERVER_PORT}"
-
-    # Prepare the `bootc-install-config.toml` file.
-    # This file will be copied into the `bootc` image during its build,
-    # and then processed by `bootc install` to configure LUKS and Clevis.
-    rlLogInfo "Preparing bootc install config file: ${BOOTC_INSTALL_CONFIG_FILENAME}"
-    rlRun "cp ${BOOTC_INSTALL_CONFIG_TEMPLATE} ${BOOTC_INSTALL_CONFIG_FILENAME}" 0 "Copy bootc install config template"
-    # Substitute dynamic values into the TOML file
-    rlRun "sed -i 's|\${TANG_SERVER}|${TANG_IP}|g' ${BOOTC_INSTALL_CONFIG_FILENAME}" 0 "Substitute TANG_IP in install config"
-    rlRun "sed -i 's|\${TANG_SERVER_PORT}|${TANG_SERVER_PORT}|g' ${BOOTC_INSTALL_CONFIG_FILENAME}" 0 "Substitute TANG_SERVER_PORT in install config"
-    rlRun "sed -i 's|\${LUKS_INITIAL_PASSPHRASE}|${LUKS_INITIAL_PASSPHRASE}|g' ${BOOTC_INSTALL_CONFIG_FILENAME}" 0 "Substitute initial LUKS passphrase in install config"
-    rlFileSubmit "${BOOTC_INSTALL_CONFIG_FILENAME}" "${BOOTC_INSTALL_CONFIG_FILENAME}" # Make it available in tmt's artifacts/test directory for copying by BOOTC_RUN_CMD
-
-    # Set environment variables that the `bootc_test_prepare` orchestrator will read.
-
-    # 1. BOOTC_INSTALL_PACKAGES: Essential Clevis/LUKS/TPM tools installed *into the image*.
-    export BOOTC_INSTALL_PACKAGES="clevis clevis-luks luksmeta tang expect socat psmisc curl softhsm opensc jose cryptsetup openssl git python3-pip clevis-pin-pkcs11 python-pip libjose-devel cryptsetup-devel tpm2-tools libluksmeta-devel"
-
-    # 2. BOOTC_RUN_CMD: Command to be run *inside the Containerfile build*.
-    # This command copies our templated `luks-clevis-config.toml` into
-    # `/usr/lib/bootc/install/` within the image's filesystem.
-    # The `bootc_test_prepare` script copies the entire tmt run directory (which includes our test dir and its files)
-    # into its build context, typically under `/var/tmp/tmt/run-.../path/to/my/test/`.
-    # So, `cp ${BOOTC_INSTALL_CONFIG_FILENAME}` from the current Containerfile build context
-    # correctly refers to our file.
-    export BOOTC_RUN_CMD="mkdir -p /usr/lib/bootc/install && cp ${BOOTC_INSTALL_CONFIG_FILENAME} /usr/lib/bootc/install/${BOOTC_INSTALL_CONFIG_FILENAME} && chmod 644 /usr/lib/bootc/install/${BOOTC_INSTALL_CONFIG_FILENAME}"
-
-    # 3. BOOTC_KERNEL_ARGS: Ensure `rd.neednet=1` for network access early in boot.
-    export BOOTC_KERNEL_ARGS='["rd.neednet=1"]'
-
-    rlLogInfo "Environment variables set for `bootc_test_prepare` orchestrator:"
-    rlRun "env | grep BOOTC_"
-
-    # No explicit `bootc build` or `bootc install` here.
-    # These actions are handled by the `bootc_test_prepare` script based on the
-    # environment variables we've just exported.
+    # Get the Tang server IP from the file created by the 'prepare' phase.
+    TANG_IP=$(cat /var/tmp/clevis_tang_ip.txt 2>/dev/null)
+    rlAssertNotEquals "Tang server IP not found in /var/tmp/clevis_tang_ip.txt. Prepare phase failed?" "" "$TANG_IP"
+    rlLogInfo "Tang server for verification is at: ${TANG_IP}:${TANG_SERVER_PORT}"
 
   rlPhaseEnd
 
@@ -123,35 +77,39 @@ EOF
     fi
 
     # Verify that the root filesystem is indeed mounted via LUKS.
-    # The `luks-clevis-config.toml` will create a LUKS volume on /dev/vda (or specified disk).
-    # Assuming the root partition is /dev/vda2 (common for OS installs on a single disk).
     rlRun "lsblk -no FSTYPE,MOUNTPOINT,ROUTEPATH | grep 'crypto_LUKS / /dev/mapper/root'" 0 "Verify root is LUKS-mounted"
     rlRun "sudo cryptsetup status root | grep 'cipher: aes-cbc-essiv:sha256'" 0 "Verify LUKS cipher"
     rlRun "sudo cryptsetup status root | grep 'active one key slot'" 0 "Verify LUKS active key slot (by Clevis)"
-    # IMPORTANT: Adjust /dev/vda2 if your actual root partition device node differs.
-    # You might need to add a step to dynamically determine the root LUKS device,
-    # e.g., `ROOT_LUKS_DEV=$(lsblk -no PKNAME $(findmnt -no SOURCE / | cut -d'[' -f1) | grep -E '^sd[a-z][0-9]+|^nvme[0-9]+n[0-9]+p[0-9]+')`
-    rlRun "sudo clevis luks list /dev/vda2 | grep 'tang' | grep 'tpm2' | grep 't=2'" 0 "Verify Clevis binding is present on /dev/vda2"
+
+    # Dynamically find the root LUKS device for `clevis luks list`.
+    # This is still important as the device name might vary.
+    ROOT_LUKS_DEV_CANDIDATE=$(lsblk -o NAME,TYPE,FSTYPE,MOUNTPOINT | awk '$2=="crypt" && $4=="/" {print "/dev/"$1}')
+    if [ -z "$ROOT_LUKS_DEV_CANDIDATE" ]; then
+        # Fallback for complex layouts or if the root is on an LVM that's on LUKS.
+        # This tries to find a 'crypt' device that is a parent of '/'.
+        ROOT_LUKS_DEV_CANDIDATE=$(lsblk -o NAME,TYPE,MOUNTPOINT,PKNAME | grep ' / ' | awk '{print "/dev/"$4}' | xargs -I {} sh -c 'lsblk -no NAME,TYPE {} | grep crypt | awk "{print \"/dev/\"\$1}"')
+    fi
+
+    if [ -z "$ROOT_LUKS_DEV_CANDIDATE" ]; then
+        rlLogWarning "Could not determine root LUKS device automatically. Falling back to /dev/vda2 for clevis luks list."
+        ROOT_LUKS_DEV_CANDIDATE="/dev/vda2"
+    else
+        rlLogInfo "Detected root LUKS device for clevis list: ${ROOT_LUKS_DEV_CANDIDATE}"
+    fi
+    rlRun "sudo clevis luks list ${ROOT_LUKS_DEV_CANDIDATE} | grep 'tang' | grep 'tpm2' | grep 't=2'" 0 "Verify Clevis binding is present on root LUKS device"
 
     # Verify Tang server reachability from the *booted system*.
-    # This confirms network connectivity and successful interaction with Tang.
-    rlLogInfo "Verifying Tang server reachability from the booted system..."
-    # Use the TANG_IP (which was captured in setup) of the system where Tang is running.
-    # This assumes the test host's IP is reachable from the *newly booted* bootc system.
+    rlLogInfo "Verifying Tang server reachability from the booted system (at ${TANG_IP})..."
     rlRun "curl -sfg http://${TANG_IP}:${TANG_SERVER_PORT}/adv -o /tmp/adv.jws" 0 "Download Tang advertisement from booted system"
     rlFileExists "/tmp/adv.jws" || rlDie "Tang advertisement not downloaded on booted system"
 
   rlPhaseEnd
 
   rlPhaseStartCleanup
-    # Stop Tang server on the host (where this script originally ran and where the bootc install connected to it).
-    rlRun "sudo systemctl stop tangd.socket" 0-1 "Stop tangd.socket"
-    rlRun "sudo systemctl disable tangd.socket" 0-1 "Disable tangd.socket"
+    # Restore .ssh directory from backup
+    rlRun "rlFileRestore" 0 "Restore ~/.ssh/"
 
-    # Clean up the generated install config file.
-    rlRun "rm -f ${BOOTC_INSTALL_CONFIG_FILENAME}" 0-1 "Remove generated bootc install config"
-
-    # No other cleanup needed, as the `bootc_test_prepare` orchestrator handles
-    # resetting the test system for subsequent tests (e.g., re-imaging).
+    # No other cleanup needed in this test script, as Tang server and temporary
+    # files are handled by the FMF plan's 'finish' phase or the overall TMT cleanup.
   rlPhaseEnd
 rlJournalEnd
