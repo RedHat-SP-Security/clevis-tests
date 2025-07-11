@@ -29,75 +29,45 @@
 # Include Beaker environment
 . /usr/share/beakerlib/beakerlib.sh || exit 1
 
-#!/bin/bash
-# ... (BeakerLib boilerplate as before) ...
+DEVICE="/dev/loop7"
+MAPPER_NAME="luks-test"
+MOUNT_POINT="/mnt/luks"
+TANG_IP_FILE="/etc/clevis-test-data/tang_ip.txt"
+TANG_PORT_FILE="/etc/clevis-test-data/tang_port.txt"
+TANG_DIR="/var/tmp/tang"
 
 rlJournalStart
-  rlPhaseStartSetup
-    rlImport --all || rlDie "Import failed"
-    rlRun "rlImport --all" 0 "Import libraries" || rlDie "cannot continue"
+    rlPhaseStartSetup
+        rlAssertExists "$DEVICE"
+        rlAssertExists "$TANG_IP_FILE"
+        rlAssertExists "$TANG_PORT_FILE"
+        mkdir -p "$MOUNT_POINT"
+    rlPhaseEnd
 
-    LUKS_MAPPED_NAME="test_clevis_luks"
-    LUKS_PASSPHRASE="testpassword" # Used for temporary open/close verification
-    LUKS_MOUNT_POINT="/mnt/luks_test_verify"
+    rlPhaseStartTest "Restart Tang server"
+        TANG_IP=$(cat "$TANG_IP_FILE")
+        TANG_PORT=$(cat "$TANG_PORT_FILE")
+        export TANG_KEYS="${TANG_DIR}/db"
+        rlRun "tangd $TANG_DIR $TANG_PORT &"
+        rlRun "sleep 2"
+    rlPhaseEnd
 
-    rlLogInfo "SELinux: $(getenforce)"
-    if [ "$(getenforce)" = "Enforcing" ]; then
-        rlLogInfo "Warning: SELinux is in Enforcing mode. Ensure policies allow LUKS operations."
-    fi
+    rlPhaseStartTest "Verify Clevis bindings"
+        rlRun "clevis luks list -d $DEVICE | grep tpm2"
+        rlRun "clevis luks list -d $DEVICE | grep tang"
+        rlRun "clevis luks list -d $DEVICE | grep sss"
+    rlPhaseEnd
 
-  rlPhaseEnd
+    rlPhaseStartTest "Unlock and verify content"
+        rlRun "cryptsetup open $DEVICE $MAPPER_NAME"
+        rlRun "mount /dev/mapper/$MAPPER_NAME $MOUNT_POINT"
+        rlAssertExists "$MOUNT_POINT/hello.txt"
+        rlRun "grep -q 'Test file' $MOUNT_POINT/hello.txt"
+        rlRun "umount $MOUNT_POINT"
+        rlRun "cryptsetup close $MAPPER_NAME"
+    rlPhaseEnd
 
-  rlPhaseStartTest "Verify Baked-in LUKS Device Readiness"
-    rlLogInfo "Checking for LUKS mapped device: /dev/mapper/${LUKS_MAPPED_NAME}"
-
-    # The LUKS device should be automatically opened by systemd-cryptsetup.service
-    # due to the /etc/crypttab entry and luks-loop-setup.service
-    # Check if the mapped device is active (cryptsetup status will indicate if open)
-    rlRun -s "sudo cryptsetup status ${LUKS_MAPPED_NAME}" 0 "Verify LUKS device status" || {
-        rlFail "LUKS device /dev/mapper/${LUKS_MAPPED_NAME} is not active. Check /etc/crypttab and luks-loop-setup.service."
-        # For debugging, also check if the sparse file is attached as a loop device
-        LUKS_IMAGE_PATH_IN_IMAGE="/var/lib/luks_test/test_luks_device.img"
-        if [ -f "${LUKS_IMAGE_PATH_IN_IMAGE}" ]; then
-            LOOP_DEV_STATUS=$(sudo losetup -j "${LUKS_IMAGE_PATH_IN_IMAGE}")
-            rlLogInfo "Status of ${LUKS_IMAGE_PATH_IN_IMAGE}: ${LOOP_DEV_STATUS}"
-        fi
-        rlDie "Baked-in LUKS device is not ready."
-    }
-    rlLogInfo "LUKS device /dev/mapper/${LUKS_MAPPED_NAME} is active."
-
-    # Verify filesystem
-    rlLogInfo "Checking filesystem on /dev/mapper/${LUKS_MAPPED_NAME}..."
-    rlRun -s "sudo fsck -n \"/dev/mapper/${LUKS_MAPPED_NAME}\"" 0 "Filesystem check on LUKS device" || {
-        rlFail "Filesystem check failed on LUKS device /dev/mapper/${LUKS_MAPPED_NAME}."
-        rlDie "Filesystem on baked-in LUKS device is corrupt."
-    }
-    rlLogInfo "Filesystem appears healthy."
-
-    # Mount and verify test file
-    rlLogInfo "Mounting LUKS device and verifying test file..."
-    rlRun -s "sudo mkdir -p \"${LUKS_MOUNT_POINT}\"" 0 "Create mount point"
-    rlRun -s "sudo mount \"/dev/mapper/${LUKS_MAPPED_NAME}\" \"${LUKS_MOUNT_POINT}\"" 0 "Mount LUKS device"
-    rlRun -s "grep -q 'This is a test file for LUKS verification inside the image.' \"${LUKS_MOUNT_POINT}/luks_test_file.txt\"" 0 "Verify baked-in test file content"
-    rlLogInfo "Test file verified in LUKS volume."
-    rlRun -s "sudo umount \"${LUKS_MOUNT_POINT}\"" 0 "Unmount LUKS device"
-    rlRun -s "sudo rmdir \"${LUKS_MOUNT_POINT}\"" 0 "Remove mount point"
-
-    # For clevis boot unlock, the device should typically be closed.
-    # If systemd-cryptsetup opened it, it might manage its state.
-    # We explicitly close it here to ensure it's ready for clevis operations.
-    rlLogInfo "Closing LUKS device ${LUKS_MAPPED_NAME} to prepare for clevis boot unlock tests."
-    rlRun -s "sudo cryptsetup luksClose \"${LUKS_MAPPED_NAME}\"" 0 "Close LUKS device for clevis" || {
-        rlFail "Failed to close LUKS device after verification. Clevis might not be able to unlock it."
-        rlDie "LUKS device cleanup failed."
-    }
-
-    rlLogInfo "Baked-in LUKS device setup confirmed correct and ready for clevis boot unlock."
-  rlPhaseEnd
-
-  rlPhaseStartCleanup
-    rlLogInfo "Cleanup phase for LUKS readiness check."
-    sudo cryptsetup luksClose "${LUKS_MAPPED_NAME}" 2>/dev/null || true # Ensure it's closed
-    rlRun "rlFileRestore"
-  rlPhaseEnd
+    rlPhaseStartCleanup
+        killall tangd || true
+    rlPhaseEnd
 rlJournalEnd
