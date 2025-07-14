@@ -6,10 +6,6 @@ require:
   - tang
   - podman
   - bootc
-  - qemu-kvm
-  - virt-install
-  - libvirt-daemon
-  - openssh-clients
 duration: 2h
 enabled: true
 tag:
