@@ -4,6 +4,7 @@ test: ./runtest.sh
 require:
   - clevis
   - tang
+  - clevis-dracut
 duration: 2h
 enabled: true
 tag:
