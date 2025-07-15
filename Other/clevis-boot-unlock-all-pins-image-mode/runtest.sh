@@ -26,12 +26,7 @@
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 . /usr/share/beakerlib/beakerlib.sh || exit 1
 
-# COOKIE will mark if the initial setup (LUKS format, Clevis bind) has run
-COOKIE=/var/tmp/clevis_setup_done
-# REBOOT_COOKIE will mark if the system has already rebooted after setup
-REBOOT_COOKIE=/var/tmp/rebooted_after_clevis_setup
-
-# Global variable to store the loop device path
+COOKIE=/var/tmp/reboot
 LOOP_DEV=""
 
 rlJournalStart
@@ -110,15 +105,9 @@ rlJournalStart
 
       rlRun "touch \"$COOKIE\"" 0 "Mark initial setup as complete"
       rlLogInfo "Initial setup complete. Rebooting to test automatic unlock."
-      rlRun "systemctl reboot" 0 "Trigger system reboot"
-      rlWait 300 # Wait for the system to reboot
-      # This touch will execute on the first boot after the reboot, marking the reboot cycle.
-      rlRun "touch \"$REBOOT_COOKIE\"" 0 "Mark that system has rebooted after setup"
+      
+      rhts-reboot
     else # This block runs on subsequent boots after the initial setup
-      if [ ! -e "$REBOOT_COOKIE" ]; then
-        # This state should not be reached if the test passes the reboot correctly.
-        rlDie "Unexpected state: COOKIE exists but REBOOT_COOKIE does not. Likely a test runner issue or unexpected reboot behavior."
-      fi
 
       rlLogInfo "Post-reboot: Verifying LUKS automatic unlock and mount."
 
