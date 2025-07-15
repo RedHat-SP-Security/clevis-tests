@@ -63,13 +63,16 @@ rlJournalStart
     _luks_clevis_test_logic() {
       local TPM2_AVAILABLE=true # Flag to track TPM2 presence
       local CLEVIS_PINS=""      # Variable to build dynamic Clevis pin configuration
+      local SSS_THRESHOLD=2     # Default SSS threshold (for Tang + TPM2)
 
       # Check for TPM2 availability
       if [ ! -e "/dev/tpm0" ] && [ ! -e "/dev/tpmrm0" ]; then
         rlLogInfo "TPM2 device not found (/dev/tpm0 or /dev/tpmrm0). Will proceed without TPM2 binding."
         TPM2_AVAILABLE=false
+        SSS_THRESHOLD=1 # Adjust threshold since only Tang pin will be used
       else
         rlLogInfo "TPM2 device found. Will include TPM2 binding."
+        # SSS_THRESHOLD remains 2
       fi
 
       # This block runs the initial setup. It should execute only once.
@@ -116,8 +119,8 @@ rlJournalStart
         fi
         CLEVIS_PINS+='}' # Close the pins object
 
-        rlLogInfo "Binding Clevis to LUKS device ${TARGET_DISK} with dynamic pins: ${CLEVIS_PINS}."
-        rlRun "clevis luks bind -d ${TARGET_DISK} sss '{\"t\":2,\"pins\":${CLEVIS_PINS}}' <<< 'password'" 0 "Bind Clevis to LUKS device with dynamic pins"
+        rlLogInfo "Binding Clevis to LUKS device ${TARGET_DISK} with dynamic pins: ${CLEVIS_PINS} (t=${SSS_THRESHOLD})."
+        rlRun "clevis luks bind -d ${TARGET_DISK} sss '{\"t\":${SSS_THRESHOLD},\"pins\":${CLEVIS_PINS}}' <<< 'password'" 0 "Bind Clevis to LUKS device with dynamic pins"
 
         # Add entry to /etc/crypttab for automatic unlock at boot
         # /etc is usually a writable overlay in Image Mode systems.
