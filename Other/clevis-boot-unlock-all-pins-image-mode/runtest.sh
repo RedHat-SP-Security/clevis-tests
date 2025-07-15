@@ -39,9 +39,7 @@ LOOP_DEV=""
 PERSISTENT_LOOPFILE="/var/opt/loopfile"
 PERSISTENT_ADV_FILE="/var/opt/adv.jws"
 
-# Define the source path for the initramfs hook script (assuming it's in the same dir as runtest.sh)
-SOURCE_INITRAMFS_HOOK="90luks-loop.sh" # Assumed to be in the same directory as this runtest.sh
-# Define destination path for the hook script in initramfs (copied to /usr/lib/dracut/hooks/cmdline/)
+# Define path for the initramfs hook script (copied to /usr/lib/dracut/hooks/cmdline/)
 INITRAMFS_HOOK_DEST="/usr/lib/dracut/hooks/cmdline/90luks-loop.sh"
 
 
@@ -102,11 +100,42 @@ rlJournalStart
         rlLogInfo "Using loop device ${TARGET_DISK} for LUKS."
         # --- END: Loop device setup ---
 
-        # --- START: Initramfs Hook Script preparation (copy from source) ---
-        rlLogInfo "Copying initramfs hook script to persistent location."
-        # Copy the pre-defined hook script from the test source directory to /var/opt/
-        rlRun "cp \"${SOURCE_INITRAMFS_HOOK}\" \"/var/opt/90luks-loop.sh\"" 0 "Copy 90luks-loop.sh to /var/opt/"
-        rlRun "chmod +x /var/opt/90luks-loop.sh" 0 "Set executable permissions for hook script"
+        # --- START: Initramfs Hook Script preparation (for direct copy) ---
+        rlLogInfo "Creating initramfs hook script to re-create loop device."
+        # The hook script itself, written to a persistent location temporarily
+        # Ensure 'EOF_HOOK' is on a line by itself with no leading/trailing whitespace
+        cat << 'EOF_HOOK' > "/var/opt/90luks-loop.sh"
+#!/bin/bash
+
+# Redirect stdout/stderr to console and log for debugging
+exec >/dev/kmsg 2>&1
+echo "initramfs: Running 90luks-loop.sh hook..."
+echo "initramfs: Current working directory: $(pwd)"
+echo "initramfs: Listing root content:"
+ls -F /
+ls -l /var/opt/ || true # List contents of /var/opt in initramfs
+
+# Check if the persistent loopfile actually exists in initramfs
+if [ -f "${PERSISTENT_LOOPFILE}" ]; then
+    echo "initramfs: ${PERSISTENT_LOOPFILE} found. Attempting losetup."
+    # Create the loop device. It will find a free /dev/loopX.
+    LDEV=\$(losetup -f --show "${PERSISTENT_LOOPFILE}")
+    if [ -n "\$LDEV" ]; then
+        echo "initramfs: losetup done: \$LDEV for ${PERSISTENT_LOOPFILE}"
+        # Important: Inform udev that a new block device is ready.
+        udevadm settle --timeout=30 # Increased udev settle timeout
+        udevadm trigger --action=add --subsystem=block
+        echo "initramfs: udevadm done. Current devices:"
+        ls -l /dev/loop* || true
+        ls -l /dev/mapper/ || true
+    else
+        echo "initramfs: ERROR: losetup failed for ${PERSISTENT_LOOPFILE}!"
+    fi
+else
+    echo "initramfs: ERROR: ${PERSISTENT_LOOPFILE} not found in initramfs at all!"
+fi
+EOF_HOOK # Ensure no leading/trailing whitespace on this line
+        rlRun "chmod +x /var/opt/90luks-loop.sh"
         # --- END: Initramfs Hook Script preparation ---
 
         rlLogInfo "Formatting ${TARGET_DISK} with LUKS2."
@@ -147,26 +176,29 @@ rlJournalStart
 
         # Dracut config files in /etc/dracut.conf.d/
         # 1. Add core dracut modules (network, crypt, clevis)
-        cat << 'EOF_CONF_MODULES' > "${DRACUT_CUSTOM_MODULES_CONF}"
+        # Ensure EOF_CONF_MODULES is on a line by itself with no leading/trailing whitespace
+        cat << 'EOF_CONF_MODULES' > "/etc/dracut.conf.d/10-custom-modules.conf"
 add_dracutmodules+=" network crypt clevis "
 EOF_CONF_MODULES
-        rlRun "chmod +x ${DRACUT_CUSTOM_MODULES_CONF}" 0 "Set permissions for custom modules config"
+        # Removed chmod +x here - these are config files, not scripts.
 
         # 2. Add kernel command line (rd.neednet=1 rd.info rd.debug)
-        cat << 'EOF_CONF_NET' > "${DRACUT_CLEVIS_NET_CONF}"
+        # Ensure EOF_CONF_NET is on a line by itself with no leading/trailing whitespace
+        cat << 'EOF_CONF_NET' > "/etc/dracut.conf.d/10-clevis-net.conf"
 kernel_cmdline="rd.neednet=1 rd.info rd.debug"
 EOF_CONF_NET
-        rlRun "chmod +x ${DRACUT_CLEVIS_NET_CONF}" 0 "Set permissions for clevis network config"
+        # Removed chmod +x here - these are config files, not scripts.
 
         # 3. Configure dracut to install the hook script and loopfile
         #    Use 'install_items+' to copy files to the exact paths in the initramfs.
         #    The hook script is copied to a standard cmdline hook location within initramfs.
         #    The loopfile is copied to its original persistent path within initramfs.
-        cat << 'EOF_CONF_INSTALL' > "${DRACUT_LOOPLUKS_INSTALL_CONF}"
-install_items+="/var/opt/90luks-loop.sh /usr/lib/dracut/hooks/cmdline/90luks-loop.sh"
+        # Ensure EOF_CONF_INSTALL is on a line by itself with no leading/trailing whitespace
+        cat << 'EOF_CONF_INSTALL' > "/etc/dracut.conf.d/99-loopluks-install.conf"
+install_items+="/var/opt/90luks-loop.sh ${INITRAMFS_HOOK_DEST}" # Explicitly copy to the correct hook path
 install_items+="${PERSISTENT_LOOPFILE} /${PERSISTENT_LOOPFILE#/}"
 EOF_CONF_INSTALL
-        rlRun "chmod +x ${DRACUT_LOOPLUKS_INSTALL_CONF}" 0 "Set permissions for loopluks install config"
+        # Removed chmod +x here - these are config files, not scripts.
 
         # Regenerate initramfs. dracut will pick up all *.conf files from /etc/dracut.conf.d/.
         # Use --force to rebuild the current kernel's initramfs.
