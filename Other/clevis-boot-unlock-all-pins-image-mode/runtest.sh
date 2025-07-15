@@ -60,6 +60,13 @@ rlJournalStart
   rlPhaseStartTest "LUKS and Clevis Setup and Verification"
     # This block runs the initial setup. It should execute only once.
     if [ ! -e "$COOKIE" ]; then
+      # Check for TPM2 availability
+      if [ ! -e "/dev/tpm0" ] && [ ! -e "/dev/tpmrm0" ]; then
+        rlLogInfo "TPM2 device not found (/dev/tpm0 or /dev/tpmrm0). Skipping LUKS setup and Clevis binding with TPM2."
+        rlJournalReport
+        return 0 # Exit the phase successfully, but effectively skip the core logic
+      fi
+
       rlLogInfo "Initial run: Setting up LUKS device and Clevis binding."
 
       # --- START: Loop device setup ---
@@ -86,15 +93,19 @@ rlJournalStart
       rlRun "cryptsetup luksClose myluksdev" 0 "Close LUKS device after initial setup"
 
       rlLogInfo "Downloading Tang advertisement."
-      rlRun "curl -sfg http://${TANG_SERVER}/adv -o /adv.jws" 0 "Download Tang advertisement"
+      # Save to a writable location like /var/tmp/
+      rlRun "curl -sfg http://${TANG_SERVER}/adv -o /var/tmp/adv.jws" 0 "Download Tang advertisement"
 
       rlLogInfo "Binding Clevis to LUKS device ${TARGET_DISK} with Tang and TPM2 pins."
-      rlRun "clevis luks bind -d ${TARGET_DISK} sss '{\"t\":2,\"pins\":{\"tang\":[{\"url\":\"http://\"\"${TANG_SERVER}\"\"\",\"adv\":\"/adv.jws\"}], \"tpm2\": {\"pcr_bank\":\"sha256\", \"pcr_ids\":\"0,7\"}}}' <<< 'password'" 0 "Bind Clevis to LUKS device with Tang and TPM2"
+      # Corrected JSON syntax: removed extra double quotes around variables in the URL and ADV path.
+      rlRun "clevis luks bind -d ${TARGET_DISK} sss '{\"t\":2,\"pins\":{\"tang\":[{\"url\":\"http://${TANG_SERVER}\",\"adv\":\"/var/tmp/adv.jws\"}], \"tpm2\": {\"pcr_bank\":\"sha256\", \"pcr_ids\":\"0,7\"}}}' <<< 'password'" 0 "Bind Clevis to LUKS device with Tang and TPM2"
 
       rlLogInfo "Enabling clevis-luks-askpass and configuring dracut for network."
+      # The dracut config file for network needs to be in /etc/dracut.conf.d which is managed by ostree/bootc.
+      # It's generally expected to be part of the image, or part of the `clevis-boot-unlock-all-pins` script if it's placed there.
       rlRun "systemctl enable clevis-luks-askpass.path" 0 "Enable clevis-luks-askpass (if not already enabled by snippet)"
-      rlRun "mkdir -p /etc/dracut.conf.d/" 0 "Ensure dracut.conf.d exists"
-      rlRun "echo 'kernel_cmdline=\"rd.neednet=1\"' > /etc/dracut.conf.d/10-clevis-net.conf" 0 "Add kernel command line for network to dracut"
+      rlRun "mkdir -p /etc/dracut.conf.d/" 0 "Ensure dracut.conf.d exists (writable overlay expected)"
+      rlRun "echo 'kernel_cmdline=\"rd.neednet=1\"' > /etc/dracut.conf.d/10-clevis-net.conf" 0 "Add kernel command line for network to dracut (writable overlay expected)"
       rlRun "dracut -f --regenerate-all" 0 "Regenerate initramfs to include Clevis and network settings"
 
       rlRun "touch \"$COOKIE\"" 0 "Mark initial setup as complete"
@@ -154,9 +165,7 @@ rlJournalStart
     # Clean up cookies and temporary files
     rlRun "rm -f \"$COOKIE\"" ||: "Failed to remove COOKIE."
     rlRun "rm -f \"$REBOOT_COOKIE\"" ||: "Failed to remove REBOOT_COOKIE."
-    rlRun "rm -f /adv.jws" ||: "Failed to remove /adv.jws."
+    rlRun "rm -f /var/tmp/adv.jws" ||: "Failed to remove /var/tmp/adv.jws."
     rlRun "rm -f /etc/dracut.conf.d/10-clevis-net.conf" ||: "Failed to remove dracut config."
     # Regenerate initramfs to remove changes made by the test for clean state.
     rlRun "dracut -f --regenerate-all" ||: "Failed to regenerate initramfs during cleanup."
-  rlPhaseEnd
-rlJournalEnd
