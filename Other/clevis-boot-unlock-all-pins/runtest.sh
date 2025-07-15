@@ -88,7 +88,7 @@ EOF
     TANG_IP=$(ip addr show $(ip route get 1 | awk '{print $5; exit}') | grep 'inet ' | awk '{print $2}' | cut -d/ -f1)
     rlFileSubmit "${rlRun_LOG}" "env.log"
     # Generate the certs needed by the start_tang_fn function
-    rlRun "gen_tls_cert ${CRYPTO_ALG} ${TANG_IP}" 0 "Generate TLS certificate"
+    rlRun "gen_tls_cert ${CRYPTO_ALG} 'server.key' 'server.crt' ${TANG_IP}" 0 "Generate TLS certificate"
     rlRun "mkdir -p tangd/db"
     gen_tang_keys "tangd/db"
     # Start Tang using the socat utility and capture the port it's running on

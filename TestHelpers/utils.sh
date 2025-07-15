@@ -11,11 +11,11 @@ log.level = DEBUG
 EOF
 }
 
-# This function generates a TLS cert based on the CRYPTO_ALG variable
+# Generates a TLS cert with a specific algorithm and output filenames.
 gen_tls_cert() {
-    local crypto_alg=$1
-    # The second argument is the optional IP address
-    local ip_address=$2
+    local crypto_alg=$1 key_file=$2 cert_file=$3
+    # The fourth argument is the optional IP address
+    local ip_address=$4
 
     rlLog "Generating $crypto_alg TLS certificate..."
 
@@ -29,27 +29,30 @@ gen_tls_cert() {
         rlLog "Including IP SAN: $ip_address"
     fi
 
-    local openssl_cmd_base="openssl req -x509 -nodes \
-        -keyout server.key -out server.crt \
-        -subj \"/CN=localhost\" -days 365 \
-        -addext \"$san_options\""
+    local pkey_alg_opt=""
+    local extra_opts=""
 
     case "$crypto_alg" in
         RSA)
-            rlRun "$openssl_cmd_base -newkey rsa:4096"
+            pkey_alg_opt="rsa:4096"
             ;;
         ECC | ECDSA)
-            rlRun "$openssl_cmd_base -newkey ec -pkeyopt ec_paramgen_curve:prime256v1"
+            pkey_alg_opt="ec"
+            extra_opts="-pkeyopt ec_paramgen_curve:prime256v1"
             ;;
         ML-DSA-65)
-            rlLog "Note: This requires OpenSSL compiled with a post-quantum provider (e.g., OQS) that supports 'mldsa65'."
-            rlRun "$openssl_cmd_base -newkey mldsa65"
+            rlLog "Note: Using a post-quantum algorithm."
+            pkey_alg_opt="mldsa65"
             ;;
         *)
-            rlLogFatal "Unsupported TLS algorithm: $CRYPTO_ALG. Use RSA, ECC, or ML-DSA-65."
-            exit 1
-            ;;
+            rlLogFatal "Unsupported algorithm: $crypto_alg"; return 1 ;;
     esac
+
+    rlRun "openssl req -x509 -nodes \
+        -newkey $pkey_alg_opt $extra_opts \
+        -keyout \"$key_file\" -out \"$cert_file\" \
+        -subj \"/CN=localhost\" -days 365 \
+        -addext \"$san_options\""
 }
 
 install_softhsm() {

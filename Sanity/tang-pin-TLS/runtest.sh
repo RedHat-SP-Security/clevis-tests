@@ -56,7 +56,7 @@ rlJournalStart
         rlLog "TLS is ENABLED for this run."
         rlRun "TmpDir=\$(mktemp -d)" 0 "Creating tmp directory"
         rlRun "pushd $TmpDir"
-        rlRun "gen_tls_cert ${CRYPTO_ALG}"
+        rlRun "gen_tls_cert ${CRYPTO_ALG} 'server.key' 'server.crt'"
         trust_cert
     rlPhaseEnd
 
