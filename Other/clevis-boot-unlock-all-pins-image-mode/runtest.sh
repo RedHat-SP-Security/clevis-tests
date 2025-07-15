@@ -62,7 +62,7 @@ rlJournalStart
     # Wrap the entire phase logic in a function to allow 'return' to exit gracefully on fatal errors.
     _luks_clevis_test_logic() {
       local TPM2_AVAILABLE=true # Flag to track TPM2 presence
-      local CLEVIS_PINS="" # Variable to build dynamic Clevis pin configuration
+      local CLEVIS_PINS=""      # Variable to build dynamic Clevis pin configuration
 
       # Check for TPM2 availability
       if [ ! -e "/dev/tpm0" ] && [ ! -e "/dev/tpmrm0" ]; then
@@ -122,15 +122,16 @@ rlJournalStart
         # Add entry to /etc/crypttab for automatic unlock at boot
         # /etc is usually a writable overlay in Image Mode systems.
         rlLogInfo "Adding entry to /etc/crypttab for automatic LUKS unlock."
-        # The 'luks' option ensures systemd-cryptsetup uses the LUKS device handler.
-        # The 'clevis' option ensures clevis is used for unlocking.
-        # The 'nofail' option prevents boot from hanging if unlock fails (good for tests).
-        rlRun "echo 'myluksdev UUID=${LUKS_UUID} none luks,clevis,nofail' >> /etc/crypttab" 0 "Add crypttab entry"
+        # Add 'x-systemd.device-timeout=60s' for debugging if network is slow/failed in initramfs.
+        rlRun "echo 'myluksdev UUID=${LUKS_UUID} none luks,clevis,nofail,x-systemd.device-timeout=60s' >> /etc/crypttab" 0 "Add crypttab entry"
 
         rlLogInfo "Enabling clevis-luks-askpass and configuring dracut for network."
+        # Add dracut force modules for more robust initramfs generation
+        # Adding network, crypt, clevis directly. This is crucial for initramfs.
+        rlRun "echo 'add_dracutmodules+=\" network crypt clevis \"' > /etc/dracut.conf.d/10-custom-modules.conf" 0 "Add custom dracut modules"
         rlRun "systemctl enable clevis-luks-askpass.path" 0 "Enable clevis-luks-askpass (if not already enabled by snippet)"
         rlRun "mkdir -p /etc/dracut.conf.d/" 0 "Ensure dracut.conf.d exists (writable overlay expected)"
-        rlRun "echo 'kernel_cmdline=\"rd.neednet=1\"' > /etc/dracut.conf.d/10-clevis-net.conf" 0 "Add kernel command line for network to dracut (writable overlay expected)"
+        rlRun "echo 'kernel_cmdline=\"rd.neednet=1 rd.info rd.debug\"' > /etc/dracut.conf.d/10-clevis-net.conf" 0 "Add kernel command line for network and debug to dracut" # Added rd.info rd.debug for better journal logs
         # Crucial: Regenerate initramfs to include crypttab and updated Clevis modules
         rlRun "dracut -f --regenerate-all" 0 "Regenerate initramfs to include Clevis and network settings"
 
@@ -141,7 +142,7 @@ rlJournalStart
       else # This block runs on subsequent boots after the initial setup
         rlLogInfo "Post-reboot: Verifying LUKS automatic unlock and mount."
 
-        # Re-create the loop device from its persistent backing file.
+        # For verification: we need to re-create the loop device from its persistent backing file.
         # systemd-cryptsetup should have automatically unlocked it if /etc/crypttab was correct.
         rlLogInfo "Re-creating loop device for verification and checking status."
         rlRun "LOOP_DEV=\$(losetup -f --show /var/opt/loopfile)" 0 "Re-create loop device from persistent file for verification"
@@ -196,9 +197,10 @@ rlJournalStart
     rlRun "rm -f \"$COOKIE\"" ||: "Failed to remove COOKIE."
     rlRun "rm -f /var/opt/adv.jws" ||: "Failed to remove /var/opt/adv.jws."
     rlRun "rm -f /etc/dracut.conf.d/10-clevis-net.conf" ||: "Failed to remove dracut network config."
+    rlRun "rm -f /etc/dracut.conf.d/10-custom-modules.conf" ||: "Failed to remove custom dracut modules config." # New cleanup
     # Remove the crypttab entry created by the test
     # Ensure it only removes the specific line to avoid impacting other entries.
-    rlRun "sed -i '\_myluksdev UUID=.* luks,clevis,nofail_d' /etc/crypttab" ||: "Failed to remove crypttab entry."
+    rlRun "sed -i '\_myluksdev UUID=.* luks,clevis,nofail,x-systemd.device-timeout=60s_d' /etc/crypttab" ||: "Failed to remove crypttab entry." # Updated regex for crypttab
     # Regenerate initramfs to remove changes made by the test for clean state.
     rlRun "dracut -f --regenerate-all" ||: "Failed to regenerate initramfs during cleanup."
   rlPhaseEnd
