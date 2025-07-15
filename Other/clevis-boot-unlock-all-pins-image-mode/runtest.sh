@@ -12,7 +12,7 @@
 #
 #   This program is free software: you can redistribute it and/or
 #   modify it under the terms of the GNU General Public License as
-#   published by the Free Software Foundation, either version 2 of
+#   published by the Free Free Software Foundation, either version 2 of
 #   the License, or (at your option) any later version.
 #
 #   This program is distributed in the hope that it will be
@@ -26,7 +26,12 @@
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 . /usr/share/beakerlib/beakerlib.sh || exit 1
 
-COOKIE=/var/tmp/reboot
+# COOKIE will mark if the initial setup (LUKS format, Clevis bind) has run
+COOKIE=/var/tmp/clevis_setup_done
+# REBOOT_COOKIE will mark if the system has already rebooted after setup
+REBOOT_COOKIE=/var/tmp/rebooted_after_clevis_setup
+
+# Global variable to store the loop device path
 LOOP_DEV=""
 
 rlJournalStart
@@ -105,9 +110,16 @@ rlJournalStart
 
       rlRun "touch \"$COOKIE\"" 0 "Mark initial setup as complete"
       rlLogInfo "Initial setup complete. Rebooting to test automatic unlock."
-      
-      rhts-reboot
+      # If using 'tmt', tmt-reboot is usually handled by the 'reboot' step in your TMT plan,
+      # and the script just exits successfully to signal it's ready for reboot.
+      # If you're using 'rhts', keep 'rhts-reboot'.
+      # For pure Beakerlib or TMT where the script initiates reboot:
+      rlRun "tmt-reboot" 0 "Trigger system reboot" # Or rhts-reboot if that's your test runner.
+      # The 'REBOOT_COOKIE' is touched on the *next* execution of the script after the reboot.
     else # This block runs on subsequent boots after the initial setup
+      # Touch REBOOT_COOKIE at the beginning of the post-reboot phase
+      # to confirm the test proceeded past the initial reboot.
+      rlRun "touch \"$REBOOT_COOKIE\"" 0 "Mark that system has rebooted after setup"
 
       rlLogInfo "Post-reboot: Verifying LUKS automatic unlock and mount."
 
@@ -158,3 +170,5 @@ rlJournalStart
     rlRun "rm -f /etc/dracut.conf.d/10-clevis-net.conf" ||: "Failed to remove dracut config."
     # Regenerate initramfs to remove changes made by the test for clean state.
     rlRun "dracut -f --regenerate-all" ||: "Failed to regenerate initramfs during cleanup."
+  rlPhaseEnd
+rlJournalEnd
