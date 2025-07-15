@@ -4,8 +4,6 @@ test: ./runtest.sh
 require:
   - clevis
   - tang
-  - podman
-  - bootc
 duration: 2h
 enabled: true
 tag:
