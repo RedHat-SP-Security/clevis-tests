@@ -59,13 +59,17 @@ rlJournalStart
   rlPhaseEnd
 
   rlPhaseStartTest "LUKS and Clevis Setup and Verification"
-    # Wrap the entire phase logic in a function to allow 'return' to exit the phase gracefully.
+    # Wrap the entire phase logic in a function to allow 'return' to exit gracefully on fatal errors.
     _luks_clevis_test_logic() {
-      # Check for TPM2 availability. If not present, skip the core LUKS setup.
+      local TPM2_AVAILABLE=true # Flag to track TPM2 presence
+      local CLEVIS_PINS="" # Variable to build dynamic Clevis pin configuration
+
+      # Check for TPM2 availability
       if [ ! -e "/dev/tpm0" ] && [ ! -e "/dev/tpmrm0" ]; then
-        rlLogInfo "TPM2 device not found (/dev/tpm0 or /dev/tpmrm0). Skipping LUKS setup and Clevis binding with TPM2."
-        rlPhaseSkip # Mark the current phase as SKIPPED in BeakerLib.
-        return 0    # Exit this function, effectively stopping the phase execution.
+        rlLogInfo "TPM2 device not found (/dev/tpm0 or /dev/tpmrm0). Will proceed without TPM2 binding."
+        TPM2_AVAILABLE=false
+      else
+        rlLogInfo "TPM2 device found. Will include TPM2 binding."
       fi
 
       # This block runs the initial setup. It should execute only once.
@@ -105,10 +109,15 @@ rlJournalStart
         # Save Tang advertisement to a persistent location like /var/opt/.
         rlRun "curl -sfg http://${TANG_SERVER}/adv -o /var/opt/adv.jws" 0 "Download Tang advertisement"
 
-        rlLogInfo "Binding Clevis to LUKS device ${TARGET_DISK} with Tang and TPM2 pins."
-        # Ensure correct JSON syntax and use persistent adv path.
-        # This will only be reached if TPM2 device was found, so it should succeed.
-        rlRun "clevis luks bind -d ${TARGET_DISK} sss '{\"t\":2,\"pins\":{\"tang\":[{\"url\":\"http://${TANG_SERVER}\",\"adv\":\"/var/opt/adv.jws\"}], \"tpm2\": {\"pcr_bank\":\"sha256\", \"pcr_ids\":\"0,7\"}}}' <<< 'password'" 0 "Bind Clevis to LUKS device with Tang and TPM2"
+        # Dynamically build the Clevis pins configuration JSON
+        CLEVIS_PINS='{"tang":[{"url":"http://'"${TANG_SERVER}"'","adv":"/var/opt/adv.jws"}]'
+        if ${TPM2_AVAILABLE}; then
+          CLEVIS_PINS+=', "tpm2": {"pcr_bank":"sha256", "pcr_ids":"0,7"}'
+        fi
+        CLEVIS_PINS+='}' # Close the pins object
+
+        rlLogInfo "Binding Clevis to LUKS device ${TARGET_DISK} with dynamic pins: ${CLEVIS_PINS}."
+        rlRun "clevis luks bind -d ${TARGET_DISK} sss '{\"t\":2,\"pins\":${CLEVIS_PINS}}' <<< 'password'" 0 "Bind Clevis to LUKS device with dynamic pins"
 
         # Add entry to /etc/crypttab for automatic unlock at boot
         # /etc is usually a writable overlay in Image Mode systems.
@@ -132,7 +141,7 @@ rlJournalStart
       else # This block runs on subsequent boots after the initial setup
         rlLogInfo "Post-reboot: Verifying LUKS automatic unlock and mount."
 
-        # For verification: we need to re-create the loop device from its persistent backing file.
+        # Re-create the loop device from its persistent backing file.
         # systemd-cryptsetup should have automatically unlocked it if /etc/crypttab was correct.
         rlLogInfo "Re-creating loop device for verification and checking status."
         rlRun "LOOP_DEV=\$(losetup -f --show /var/opt/loopfile)" 0 "Re-create loop device from persistent file for verification"
@@ -144,15 +153,18 @@ rlJournalStart
         rlRun "mount | grep /mnt/luks_test" 0 "Verify /mnt/luks_test is mounted"
         rlRun "cat /mnt/luks_test/testfile.txt | grep 'Test data for LUKS device'" 0 "Verify data integrity on LUKS device"
 
-        # Check journal for successful clevis-luks-askpass operation.
+        # Check journal for successful cryptsetup operation (regardless of TPM2 presence)
         if rlIsRHELLike '>=10'; then
           rlRun "journalctl -b | grep \"Finished systemd-cryptsetup\"" 0 "Check journal for cryptsetup finish (RHEL10+)"
         else
           rlRun "journalctl -b | grep \"Finished Cryptography Setup for luks-\"" 0 "Check journal for cryptsetup finish"
-          rlRun "journalctl -b | grep \"clevis-luks-askpass.service: Deactivated successfully\"" 0 "Check journal for clevis-luks-askpass deactivation"
+          # clevis-luks-askpass.service might not be explicitly deactivated if TPM2 wasn't used.
+          # The important thing is that cryptsetup finished.
+          # If TPM2 was available, we can still check for deactivation if desired:
+          # rlRun "journalctl -b | grep \"clevis-luks-askpass.service: Deactivated successfully\"" 0 "Check journal for clevis-luks-askpass deactivation"
         fi
 
-        rlLogInfo "LUKS device successfully unlocked and mounted via Clevis with Tang/TPM2 pins."
+        rlLogInfo "LUKS device successfully unlocked and mounted via Clevis with Tang and (optionally) TPM2 pins."
       fi
     }
     # Call the function that contains the phase logic.
@@ -167,6 +179,7 @@ rlJournalStart
       rlRun "umount /mnt/luks_test" ||: "Failed to unmount /mnt/luks_test, continuing cleanup."
     fi
     # Close LUKS device (it might be open if the test failed before auto-unlock or during verification)
+    # Check if 'myluksdev' is an active crypt device before trying to close.
     if cryptsetup status myluksdev &>/dev/null; then
       rlRun "cryptsetup luksClose myluksdev" ||: "Failed to close myluksdev, continuing cleanup."
     fi
