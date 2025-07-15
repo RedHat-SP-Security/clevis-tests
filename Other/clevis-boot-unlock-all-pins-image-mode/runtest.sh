@@ -103,7 +103,8 @@ rlJournalStart
         # --- START: Initramfs Hook Script preparation (for direct copy) ---
         rlLogInfo "Creating initramfs hook script to re-create loop device."
         # The hook script itself, written to a persistent location temporarily
-        cat << 'EOF_HOOK' > "/var/opt/90luks-loop.sh" # Changed marker to EOF_HOOK
+        # Ensure 'EOF_HOOK' is on a line by itself with no leading/trailing whitespace
+        cat << 'EOF_HOOK' > "/var/opt/90luks-loop.sh"
 #!/bin/bash
 
 # Redirect stdout/stderr to console and log for debugging
@@ -133,7 +134,7 @@ if [ -f "${PERSISTENT_LOOPFILE}" ]; then
 else
     echo "initramfs: ERROR: ${PERSISTENT_LOOPFILE} not found in initramfs at all!"
 fi
-EOF_HOOK # Changed marker to EOF_HOOK
+EOF_HOOK # Ensure no leading/trailing whitespace on this line
         rlRun "chmod +x /var/opt/90luks-loop.sh"
         # --- END: Initramfs Hook Script preparation ---
 
@@ -173,31 +174,34 @@ EOF_HOOK # Changed marker to EOF_HOOK
         rlLogInfo "Enabling clevis-luks-askpass and configuring dracut for network."
         rlRun "mkdir -p /etc/dracut.conf.d/" 0 "Ensure dracut.conf.d exists (writable overlay expected)"
 
-        # 1. Configure dracut modules in a config file
-        cat << EOF_CONF_MODULES > "/etc/dracut.conf.d/10-custom-modules.conf" # Changed marker
+        # Dracut config files in /etc/dracut.conf.d/
+        # 1. Add core dracut modules (network, crypt, clevis)
+        # Ensure EOF_CONF_MODULES is on a line by itself with no leading/trailing whitespace
+        cat << EOF_CONF_MODULES > "/etc/dracut.conf.d/10-custom-modules.conf"
 add_dracutmodules+=" network crypt clevis "
-EOF_CONF_MODULES # Changed marker
+EOF_CONF_MODULES
         rlRun "chmod +x /etc/dracut.conf.d/10-custom-modules.conf" 0 "Set permissions for custom modules config"
 
         # 2. Add kernel command line (rd.neednet=1 rd.info rd.debug)
-        cat << EOF_CONF_NET > "/etc/dracut.conf.d/10-clevis-net.conf" # Changed marker
+        # Ensure EOF_CONF_NET is on a line by itself with no leading/trailing whitespace
+        cat << EOF_CONF_NET > "/etc/dracut.conf.d/10-clevis-net.conf"
 kernel_cmdline="rd.neednet=1 rd.info rd.debug"
-EOF_CONF_NET # Changed marker
+EOF_CONF_NET
         rlRun "chmod +x /etc/dracut.conf.d/10-clevis-net.conf" 0 "Set permissions for clevis network config"
 
         # 3. Configure dracut to install the hook script and loopfile
         #    Use 'install_items+' to copy files to the exact paths in the initramfs.
         #    The hook script is copied to a standard cmdline hook location within initramfs.
         #    The loopfile is copied to its original persistent path within initramfs.
-        cat << EOF_CONF_INSTALL > "/etc/dracut.conf.d/99-loopluks-install.conf" # Changed marker
-install_items+="/var/opt/90luks-loop.sh /usr/lib/dracut/hooks/cmdline/90luks-loop.sh"
+        # Ensure EOF_CONF_INSTALL is on a line by itself with no leading/trailing whitespace
+        cat << EOF_CONF_INSTALL > "/etc/dracut.conf.d/99-loopluks-install.conf"
+install_items+="/var/opt/90luks-loop.sh ${INITRAMFS_HOOK_DEST}" # Explicitly copy to the correct hook path
 install_items+="${PERSISTENT_LOOPFILE} /${PERSISTENT_LOOPFILE#/}"
-EOF_CONF_INSTALL # Changed marker
+EOF_CONF_INSTALL
         rlRun "chmod +x /etc/dracut.conf.d/99-loopluks-install.conf" 0 "Set permissions for loopluks install config"
 
         # Regenerate initramfs. dracut will pick up all *.conf files from /etc/dracut.conf.d/.
         # Use --force to rebuild the current kernel's initramfs.
-        # Removed unsupported command-line options.
         rlRun "dracut --force" 0 "Regenerate initramfs with all new configurations"
 
         rlRun "touch \"$COOKIE\"" 0 "Mark initial setup as complete"
@@ -254,10 +258,12 @@ EOF_CONF_INSTALL # Changed marker
     fi
     rlRun "rm -f ${PERSISTENT_LOOPFILE}" ||: "Failed to remove loopfile."
 
-    # Clean up initramfs hook script
-    if [ -f "/var/opt/90luks-loop.sh" ]; then # Use direct path as it's not a global var anymore
-        rlRun "rm -f /var/opt/90luks-loop.sh" ||: "Failed to remove initramfs hook script."
-    fi
+    # Clean up initramfs hook script from /var/opt/
+    rlRun "rm -f /var/opt/90luks-loop.sh" ||: "Failed to remove initramfs hook script from /var/opt/."
+    # Also clean up from where dracut might have copied it in initramfs itself.
+    # This might not be writable on the live system, so use ||:
+    rlRun "rm -f ${INITRAMFS_HOOK_DEST}" ||: "Failed to remove hook script from standard dracut location."
+
 
     # Clean up cookies and other persistent temporary files
     rlRun "rm -f \"$COOKIE\"" ||: "Failed to remove COOKIE."
@@ -268,18 +274,8 @@ EOF_CONF_INSTALL # Changed marker
     rlRun "rm -f /etc/dracut.conf.d/99-loopluks-install.conf" ||: "Failed to remove loopluks install config."
 
     # Remove the crypttab entry created by the test
-    local LUKS_CLEANUP_UUID=""
-    # Use the loop device if still active to get UUID for cleanup, otherwise fall back to generic
-    if [ -n "${LOOP_DEV}" ] && cryptsetup luksUUID "${LOOP_DEV}" &>/dev/null; then
-        LUKS_CLEANUP_UUID=$(cryptsetup luksUUID "${LOOP_DEV}")
-    fi
-
-    if [ -n "${LUKS_CLEANUP_UUID}" ]; then
-        rlRun "sed -i '\_myluksdev UUID=${LUKS_CLEANUP_UUID} none luks,clevis,nofail,x-systemd.device-timeout=120s_d' /etc/crypttab" ||: "Failed to remove specific crypttab entry by UUID."
-    else
-        # Fallback to generic removal if UUID not found (e.g., if format failed)
-        rlRun "sed -i '\_myluksdev .* none luks,clevis,nofail,x-systemd.device-timeout=120s_d' /etc/crypttab" ||: "Failed to remove generic crypttab entry."
-    fi
+    # This sed now uses the file path for robustness in cleanup if UUID isn't easily retrieved.
+    rlRun "sed -i '\_myluksdev ${PERSISTENT_LOOPFILE} none luks,clevis,nofail,x-systemd.device-timeout=120s_d' /etc/crypttab" ||: "Failed to remove crypttab entry."
 
     # Regenerate initramfs to remove changes made by the test for clean state.
     rlRun "dracut -f --regenerate-all" ||: "Failed to regenerate initramfs during cleanup."
