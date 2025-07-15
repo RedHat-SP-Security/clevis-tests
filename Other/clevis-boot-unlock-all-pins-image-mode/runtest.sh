@@ -12,7 +12,7 @@
 #
 #   This program is free software: you can redistribute it and/or
 #   modify it under the terms of the GNU General Public License as
-#   published by the Free Free Software Foundation, either version 2 of
+#   published by the Free Software Foundation, either version 2 of
 #   the License, or (at your option) any later version.
 #
 #   This program is distributed in the hope that it will be
@@ -27,11 +27,12 @@
 . /usr/share/beakerlib/beakerlib.sh || exit 1
 
 # COOKIE will mark if the initial setup (LUKS format, Clevis bind) has run
-COOKIE=/var/tmp/clevis_setup_done
-# REBOOT_COOKIE will mark if the system has already rebooted after setup
-REBOOT_COOKIE=/var/tmp/rebooted_after_clevis_setup
+# This cookie needs to be in a persistent location across reboots.
+COOKIE=/var/opt/clevis_setup_done
 
-# Global variable to store the loop device path
+# Global variable to store the loop device path.
+# This variable's value is transient for each script execution,
+# but the underlying /var/opt/loopfile provides persistence.
 LOOP_DEV=""
 
 rlJournalStart
@@ -60,27 +61,29 @@ rlJournalStart
   rlPhaseStartTest "LUKS and Clevis Setup and Verification"
     # This block runs the initial setup. It should execute only once.
     if [ ! -e "$COOKIE" ]; then
-      # Check for TPM2 availability
+      # Check for TPM2 availability. If not present, skip the core LUKS setup.
       if [ ! -e "/dev/tpm0" ] && [ ! -e "/dev/tpmrm0" ]; then
         rlLogInfo "TPM2 device not found (/dev/tpm0 or /dev/tpmrm0). Skipping LUKS setup and Clevis binding with TPM2."
         rlJournalReport
-        return 0 # Exit the phase successfully, but effectively skip the core logic
+        return 0 # Exit the phase successfully, but effectively skip the core logic.
       fi
 
       rlLogInfo "Initial run: Setting up LUKS device and Clevis binding."
 
       # --- START: Loop device setup ---
       rlLogInfo "Creating loop device for LUKS testing."
-      rlRun "dd if=/dev/zero of=/var/tmp/loopfile bs=1M count=50" 0 "Create loopfile"
-      # Capture the loop device path into LOOP_DEV
-      rlRun "LOOP_DEV=\$(losetup -f --show /var/tmp/loopfile)" 0 "Create loop device from file"
-      # Use the loop device as the target disk
+      # Ensure /var/opt exists and is writable for persistent files.
+      rlRun "mkdir -p /var/opt" 0 "Ensure /var/opt directory exists for persistent data"
+      # Create the backing file for the loop device in /var/opt/.
+      rlRun "dd if=/dev/zero of=/var/opt/loopfile bs=1M count=50" 0 "Create loopfile in persistent storage"
+      # Attach the loop device and capture its path.
+      rlRun "LOOP_DEV=\$(losetup -f --show /var/opt/loopfile)" 0 "Create loop device from file"
+      # Use the obtained loop device path as the target for LUKS.
       TARGET_DISK="${LOOP_DEV}"
       rlLogInfo "Using loop device ${TARGET_DISK} for LUKS."
       # --- END: Loop device setup ---
 
       rlLogInfo "Formatting ${TARGET_DISK} with LUKS2."
-      # Use a simple password for testing. In production, use strong, random passwords.
       rlRun "echo -n 'password' | cryptsetup luksFormat ${TARGET_DISK} --type luks2 -" 0 "Format disk with LUKS2"
 
       rlLogInfo "Opening LUKS device and creating filesystem."
@@ -93,42 +96,34 @@ rlJournalStart
       rlRun "cryptsetup luksClose myluksdev" 0 "Close LUKS device after initial setup"
 
       rlLogInfo "Downloading Tang advertisement."
-      # Save to a writable location like /var/tmp/
-      rlRun "curl -sfg http://${TANG_SERVER}/adv -o /var/tmp/adv.jws" 0 "Download Tang advertisement"
+      # Save Tang advertisement to a persistent location like /var/opt/.
+      rlRun "curl -sfg http://${TANG_SERVER}/adv -o /var/opt/adv.jws" 0 "Download Tang advertisement"
 
       rlLogInfo "Binding Clevis to LUKS device ${TARGET_DISK} with Tang and TPM2 pins."
-      # Corrected JSON syntax: removed extra double quotes around variables in the URL and ADV path.
-      rlRun "clevis luks bind -d ${TARGET_DISK} sss '{\"t\":2,\"pins\":{\"tang\":[{\"url\":\"http://${TANG_SERVER}\",\"adv\":\"/var/tmp/adv.jws\"}], \"tpm2\": {\"pcr_bank\":\"sha256\", \"pcr_ids\":\"0,7\"}}}' <<< 'password'" 0 "Bind Clevis to LUKS device with Tang and TPM2"
+      # Ensure correct JSON syntax and use persistent adv path.
+      rlRun "clevis luks bind -d ${TARGET_DISK} sss '{\"t\":2,\"pins\":{\"tang\":[{\"url\":\"http://${TANG_SERVER}\",\"adv\":\"/var/opt/adv.jws\"}], \"tpm2\": {\"pcr_bank\":\"sha256\", \"pcr_ids\":\"0,7\"}}}' <<< 'password'" 0 "Bind Clevis to LUKS device with Tang and TPM2"
 
       rlLogInfo "Enabling clevis-luks-askpass and configuring dracut for network."
-      # The dracut config file for network needs to be in /etc/dracut.conf.d which is managed by ostree/bootc.
-      # It's generally expected to be part of the image, or part of the `clevis-boot-unlock-all-pins` script if it's placed there.
+      # These changes are expected to persist across reboots, ideally baked into the image
+      # or handled by a persistent post-install script for Image Mode.
       rlRun "systemctl enable clevis-luks-askpass.path" 0 "Enable clevis-luks-askpass (if not already enabled by snippet)"
       rlRun "mkdir -p /etc/dracut.conf.d/" 0 "Ensure dracut.conf.d exists (writable overlay expected)"
       rlRun "echo 'kernel_cmdline=\"rd.neednet=1\"' > /etc/dracut.conf.d/10-clevis-net.conf" 0 "Add kernel command line for network to dracut (writable overlay expected)"
       rlRun "dracut -f --regenerate-all" 0 "Regenerate initramfs to include Clevis and network settings"
 
       rlRun "touch \"$COOKIE\"" 0 "Mark initial setup as complete"
-      rlLogInfo "Initial setup complete. Rebooting to test automatic unlock."
-      # If using 'tmt', tmt-reboot is usually handled by the 'reboot' step in your TMT plan,
-      # and the script just exits successfully to signal it's ready for reboot.
-      # If you're using 'rhts', keep 'rhts-reboot'.
-      # For pure Beakerlib or TMT where the script initiates reboot:
-      rlRun "tmt-reboot" 0 "Trigger system reboot" # Or rhts-reboot if that's your test runner.
-      # The 'REBOOT_COOKIE' is touched on the *next* execution of the script after the reboot.
-    else # This block runs on subsequent boots after the initial setup
-      # Touch REBOOT_COOKIE at the beginning of the post-reboot phase
-      # to confirm the test proceeded past the initial reboot.
-      rlRun "touch \"$REBOOT_COOKIE\"" 0 "Mark that system has rebooted after setup"
+      rlLogInfo "Initial setup complete. Triggering reboot via test runner."
+      # Exit successfully. Your test runner (tmt/rhts) should be configured
+      # to perform the reboot and re-execute this test script afterward.
+      rhts-reboot # Keeping rhts-reboot as per your last snippet.
 
+    else # This block runs on subsequent boots after the initial setup
       rlLogInfo "Post-reboot: Verifying LUKS automatic unlock and mount."
 
-      # When using a loop device, it needs to be set up again after reboot
-      # for the system to find it and for Clevis to unlock it.
-      # The loop device will be created based on the same file path.
+      # Re-create the loop device from its persistent backing file.
       rlLogInfo "Re-creating loop device for verification."
-      rlRun "LOOP_DEV=\$(losetup -f --show /var/tmp/loopfile)" 0 "Re-create loop device from file for verification"
-      TARGET_DISK="${LOOP_DEV}" # Ensure TARGET_DISK is set for verification steps
+      rlRun "LOOP_DEV=\$(losetup -f --show /var/opt/loopfile)" 0 "Re-create loop device from persistent file for verification"
+      TARGET_DISK="${LOOP_DEV}" # Ensure TARGET_DISK is set for verification steps.
 
       # Verify the LUKS device is automatically unlocked and mounted.
       rlRun "lsblk | grep myluksdev" 0 "Verify myluksdev is present and unlocked"
@@ -161,12 +156,12 @@ rlJournalStart
     if [ -n "${LOOP_DEV}" ] && losetup "${LOOP_DEV}" &>/dev/null; then
       rlRun "losetup -d ${LOOP_DEV}" ||: "Failed to detach loop device ${LOOP_DEV}."
     fi
-    rlRun "rm -f /var/tmp/loopfile" ||: "Failed to remove loopfile."
+    rlRun "rm -f /var/opt/loopfile" ||: "Failed to remove loopfile."
 
-    # Clean up cookies and temporary files
+    # Clean up cookies and temporary files in /var/opt/
     rlRun "rm -f \"$COOKIE\"" ||: "Failed to remove COOKIE."
-    rlRun "rm -f \"$REBOOT_COOKIE\"" ||: "Failed to remove REBOOT_COOKIE."
-    rlRun "rm -f /var/tmp/adv.jws" ||: "Failed to remove /var/tmp/adv.jws."
+    # REBOOT_COOKIE removed from script, no need to clean up here.
+    rlRun "rm -f /var/opt/adv.jws" ||: "Failed to remove /var/opt/adv.jws."
     rlRun "rm -f /etc/dracut.conf.d/10-clevis-net.conf" ||: "Failed to remove dracut config."
     # Regenerate initramfs to remove changes made by the test for clean state.
     rlRun "dracut -f --regenerate-all" ||: "Failed to regenerate initramfs during cleanup."
