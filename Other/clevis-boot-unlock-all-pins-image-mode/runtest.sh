@@ -115,8 +115,10 @@ check() { return 0; } # Always include this module
 depends() { echo "crypt network"; return 0; } # Ensure crypt and network modules are included
 install() {
     inst_hook cmdline 90 "${DRACUT_INITRAMFS_HOOK_SCRIPT##*/}" # Run early
-    inst_simple "${PERSISTENT_LOOPFILE}" "/${PERSISTENT_LOOPFILE#/}" # Copy the persistent loopfile
-    inst_dir "$(dirname ${PERSISTENT_LOOPFILE})" # Ensure /var/opt exists in initramfs
+    # Use inst_simple and specify destination path to ensure correct copy
+    inst_simple "${PERSISTENT_LOOPFILE}" "/${PERSISTENT_LOOPFILE#/}"
+    # Ensure the parent directory (e.g., /var/opt) exists in initramfs.
+    inst_dir "$(dirname ${PERSISTENT_LOOPFILE})"
 }
 EOF
         rlRun "chmod +x ${DRACUT_MODULE_SETUP_SCRIPT}"
@@ -125,31 +127,46 @@ EOF
         cat << EOF > "${DRACUT_INITRAMFS_HOOK_SCRIPT}"
 #!/bin/bash
 
-echo "initramfs: Running 90luks-loop.sh hook..." >> /run/initramfs/debug_loop.log
+# Redirect stdout/stderr to console and log for debugging
+exec >/dev/kmsg 2>&1
+echo "initramfs: Running 90luks-loop.sh hook..."
+echo "initramfs: Current working directory: $(pwd)"
+echo "initramfs: Listing root content:"
+ls -F /
 
-# Ensure the directory exists as it's copied into the initramfs
-mkdir -p "$(dirname ${PERSISTENT_LOOPFILE})"
+# Ensure the parent directory exists in initramfs as expected
+if [ ! -d "$(dirname ${PERSISTENT_LOOPFILE})" ]; then
+    echo "initramfs: ERROR: Parent directory for ${PERSISTENT_LOOPFILE} does not exist!"
+    mkdir -p "$(dirname ${PERSISTENT_LOOPFILE})" # Attempt to create, though inst_dir should handle this
+fi
 
 # Check if the persistent loopfile actually exists in initramfs
 if [ -f "${PERSISTENT_LOOPFILE}" ]; then
+    echo "initramfs: ${PERSISTENT_LOOPFILE} found. Attempting losetup."
     # Create the loop device. It will find a free /dev/loopX.
-    # It must happen before systemd-cryptsetup runs.
     LDEV=\$(losetup -f --show "${PERSISTENT_LOOPFILE}")
-    echo "initramfs: losetup done: \$LDEV for ${PERSISTENT_LOOPFILE}" >> /run/initramfs/debug_loop.log
-
-    # Important: Inform udev that a new block device is ready.
-    # This is critical for systemd-cryptsetup to see it.
-    udevadm settle --timeout=30 # Increased udev settle timeout
-    udevadm trigger --action=add --subsystem=block
-
-    echo "initramfs: udevadm done." >> /run/initramfs/debug_loop.log
+    if [ -n "\$LDEV" ]; then
+        echo "initramfs: losetup done: \$LDEV for ${PERSISTENT_LOOPFILE}"
+        # Important: Inform udev that a new block device is ready.
+        # This is critical for systemd-cryptsetup to see it.
+        udevadm settle --timeout=30 # Increased udev settle timeout
+        udevadm trigger --action=add --subsystem=block
+        echo "initramfs: udevadm done. Current devices:"
+        ls -l /dev/loop*
+        ls -l /dev/mapper/ || true
+    else
+        echo "initramfs: ERROR: losetup failed for ${PERSISTENT_LOOPFILE}!"
+    fi
 else
-    echo "initramfs: ERROR: ${PERSISTENT_LOOPFILE} not found in initramfs!" >> /run/initramfs/debug_loop.log
+    echo "initramfs: ERROR: ${PERSISTENT_LOOPFILE} not found in initramfs at all!"
 fi
 EOF
         rlRun "chmod +x ${DRACUT_INITRAMFS_HOOK_SCRIPT}"
 
         # Tell dracut to include the custom module from /var/opt/
+        # Use add_dracutmodules+= (space after +=) to prevent issues with other modules.
+        # Also ensure dracut.conf.d exists for these config files.
+        rlRun "mkdir -p /etc/dracut.conf.d/" 0 "Ensure /etc/dracut.conf.d exists"
         rlRun "echo 'add_dracutmodules+=\" $(basename ${DRACUT_CUSTOM_MODULE_DIR}) \"' > ${DRACUT_CONFIG_FILE}" 0 "Instruct dracut to include custom loop module"
         # --- END: Custom Dracut Module ---
 
@@ -189,10 +206,8 @@ EOF
 
         rlLogInfo "Enabling clevis-luks-askpass and configuring dracut for network."
         # Keep 'network' module. If your system uses NetworkManager, it *might* need NetworkManager dracut module:
-        # rlRun "echo 'add_dracutmodules+=\" network-manager crypt clevis \"' > /etc/dracut.conf.d/10-custom-modules.conf"
         rlRun "echo 'add_dracutmodules+=\" network crypt clevis \"' > /etc/dracut.conf.d/10-custom-modules.conf" 0 "Add custom dracut modules"
         rlRun "systemctl enable clevis-luks-askpass.path" 0 "Enable clevis-luks-askpass (if not already enabled by snippet)"
-        rlRun "mkdir -p /etc/dracut.conf.d/" 0 "Ensure dracut.conf.d exists (writable overlay expected)"
         rlRun "echo 'kernel_cmdline=\"rd.neednet=1 rd.info rd.debug\"' > /etc/dracut.conf.d/10-clevis-net.conf" 0 "Add kernel command line for network and debug to dracut"
         # Crucial: Regenerate initramfs to include all configs and custom modules
         rlRun "dracut -f --regenerate-all" 0 "Regenerate initramfs to include Clevis and network settings"
@@ -224,7 +239,7 @@ EOF
         else
           rlRun "journalctl -b | grep \"Finished Cryptography Setup for luks-\"" 0 "Check journal for cryptsetup finish"
         fi
-        # Optional: Check /run/initramfs/debug_loop.log for initramfs specific debug info.
+        # Check /run/initramfs/debug_loop.log for initramfs specific debug info.
         rlRun "cat /run/initramfs/debug_loop.log || true" 0 "Display initramfs loop debug log (if available)"
 
         rlLogInfo "LUKS device successfully unlocked and mounted via Clevis with Tang and (optionally) TPM2 pins."
@@ -264,10 +279,9 @@ EOF
     rlRun "rm -f ${PERSISTENT_ADV_FILE}" ||: "Failed to remove persistent advertisement file."
     rlRun "rm -f /etc/dracut.conf.d/10-clevis-net.conf" ||: "Failed to remove dracut network config."
     rlRun "rm -f /etc/dracut.conf.d/10-custom-modules.conf" ||: "Failed to remove custom dracut modules config."
-    rlRun "rm -f ${DRACUT_CONFIG_FILE}" ||: "Failed to remove custom dracut module config file." # New cleanup for 99-loopluks.conf
+    rlRun "rm -f ${DRACUT_CONFIG_FILE}" ||: "Failed to remove custom dracut module config file."
 
     # Remove the crypttab entry created by the test
-    # Get the UUID from the disk if it still exists (for robustness)
     local LUKS_CLEANUP_UUID=""
     # Attempt to get the UUID if the loop device is still active
     if [ -n "${LOOP_DEV}" ] && cryptsetup luksUUID "${LOOP_DEV}" &>/dev/null; then
