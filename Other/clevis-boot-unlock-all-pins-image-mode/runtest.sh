@@ -39,12 +39,9 @@ LOOP_DEV=""
 PERSISTENT_LOOPFILE="/var/opt/loopfile"
 PERSISTENT_ADV_FILE="/var/opt/adv.jws"
 
-# Define paths for custom dracut module (NOW IN /VAR/OPT, NOT /USR/LIB!)
-DRACUT_CUSTOM_MODULE_BASEDIR="/var/opt/dracut-modules" # New base directory
-DRACUT_CUSTOM_MODULE_DIR="${DRACUT_CUSTOM_MODULE_BASEDIR}/99loopluks"
-DRACUT_MODULE_SETUP_SCRIPT="${DRACUT_CUSTOM_MODULE_DIR}/module-setup.sh"
-DRACUT_INITRAMFS_HOOK_SCRIPT="${DRACUT_CUSTOM_MODULE_DIR}/90luks-loop.sh"
-DRACUT_CONFIG_FILE="/etc/dracut.conf.d/99-loopluks.conf" # New config to include module
+# Define path for the initramfs hook script (still in /var/opt/)
+INITRAMFS_HOOK_SCRIPT="/var/opt/90luks-loop.sh"
+
 
 rlJournalStart
   rlPhaseStartSetup
@@ -103,28 +100,10 @@ rlJournalStart
         rlLogInfo "Using loop device ${TARGET_DISK} for LUKS."
         # --- END: Loop device setup ---
 
-        # --- START: Custom Dracut Module for Initramfs Loop Device ---
-        rlLogInfo "Setting up custom Dracut module to re-create loop device in initramfs (in /var/opt/)."
-        # Create directory in /var/opt/, which is writable and persistent.
-        rlRun "mkdir -p ${DRACUT_CUSTOM_MODULE_DIR}" 0 "Create custom Dracut module directory in /var/opt"
-
-        # module-setup.sh: Tells dracut what to include
-        cat << EOF > "${DRACUT_MODULE_SETUP_SCRIPT}"
-#!/bin/bash
-check() { return 0; } # Always include this module
-depends() { echo "crypt network"; return 0; } # Ensure crypt and network modules are included
-install() {
-    inst_hook cmdline 90 "${DRACUT_INITRAMFS_HOOK_SCRIPT##*/}" # Run early
-    # Use inst_simple and specify destination path to ensure correct copy
-    inst_simple "${PERSISTENT_LOOPFILE}" "/${PERSISTENT_LOOPFILE#/}"
-    # Ensure the parent directory (e.g., /var/opt) exists in initramfs.
-    inst_dir "$(dirname ${PERSISTENT_LOOPFILE})"
-}
-EOF
-        rlRun "chmod +x ${DRACUT_MODULE_SETUP_SCRIPT}"
-
-        # 90luks-loop.sh: The script that runs in initramfs
-        cat << EOF > "${DRACUT_INITRAMFS_HOOK_SCRIPT}"
+        # --- START: Initramfs Hook Script ---
+        rlLogInfo "Creating initramfs hook script to re-create loop device."
+        # The hook script itself, written to a persistent location
+        cat << EOF > "${INITRAMFS_HOOK_SCRIPT}"
 #!/bin/bash
 
 # Redirect stdout/stderr to console and log for debugging
@@ -137,7 +116,8 @@ ls -F /
 # Ensure the parent directory exists in initramfs as expected
 if [ ! -d "$(dirname ${PERSISTENT_LOOPFILE})" ]; then
     echo "initramfs: ERROR: Parent directory for ${PERSISTENT_LOOPFILE} does not exist!"
-    mkdir -p "$(dirname ${PERSISTENT_LOOPFILE})" # Attempt to create, though inst_dir should handle this
+    # Attempt to create, though inst_dir should have handled this if module-setup.sh was used
+    mkdir -p "$(dirname ${PERSISTENT_LOOPFILE})"
 fi
 
 # Check if the persistent loopfile actually exists in initramfs
@@ -148,11 +128,10 @@ if [ -f "${PERSISTENT_LOOPFILE}" ]; then
     if [ -n "\$LDEV" ]; then
         echo "initramfs: losetup done: \$LDEV for ${PERSISTENT_LOOPFILE}"
         # Important: Inform udev that a new block device is ready.
-        # This is critical for systemd-cryptsetup to see it.
         udevadm settle --timeout=30 # Increased udev settle timeout
         udevadm trigger --action=add --subsystem=block
         echo "initramfs: udevadm done. Current devices:"
-        ls -l /dev/loop*
+        ls -l /dev/loop* || true
         ls -l /dev/mapper/ || true
     else
         echo "initramfs: ERROR: losetup failed for ${PERSISTENT_LOOPFILE}!"
@@ -161,15 +140,8 @@ else
     echo "initramfs: ERROR: ${PERSISTENT_LOOPFILE} not found in initramfs at all!"
 fi
 EOF
-        rlRun "chmod +x ${DRACUT_INITRAMFS_HOOK_SCRIPT}"
-
-        # Tell dracut to include the custom module from /var/opt/
-        # Use add_dracutmodules+= (space after +=) to prevent issues with other modules.
-        # Also ensure dracut.conf.d exists for these config files.
-        rlRun "mkdir -p /etc/dracut.conf.d/" 0 "Ensure /etc/dracut.conf.d exists"
-        rlRun "echo 'add_dracutmodules+=\" $(basename ${DRACUT_CUSTOM_MODULE_DIR}) \"' > ${DRACUT_CONFIG_FILE}" 0 "Instruct dracut to include custom loop module"
-        # --- END: Custom Dracut Module ---
-
+        rlRun "chmod +x ${INITRAMFS_HOOK_SCRIPT}"
+        # --- END: Initramfs Hook Script ---
 
         rlLogInfo "Formatting ${TARGET_DISK} with LUKS2."
         rlRun "echo -n 'password' | cryptsetup luksFormat ${TARGET_DISK} --type luks2 -" 0 "Format disk with LUKS2"
@@ -205,12 +177,12 @@ EOF
         rlRun "echo 'myluksdev UUID=${LUKS_UUID} none luks,clevis,nofail,x-systemd.device-timeout=120s' >> /etc/crypttab" 0 "Add crypttab entry with UUID"
 
         rlLogInfo "Enabling clevis-luks-askpass and configuring dracut for network."
-        # Keep 'network' module. If your system uses NetworkManager, it *might* need NetworkManager dracut module:
+        rlRun "mkdir -p /etc/dracut.conf.d/" 0 "Ensure dracut.conf.d exists (writable overlay expected)"
         rlRun "echo 'add_dracutmodules+=\" network crypt clevis \"' > /etc/dracut.conf.d/10-custom-modules.conf" 0 "Add custom dracut modules"
         rlRun "systemctl enable clevis-luks-askpass.path" 0 "Enable clevis-luks-askpass (if not already enabled by snippet)"
         rlRun "echo 'kernel_cmdline=\"rd.neednet=1 rd.info rd.debug\"' > /etc/dracut.conf.d/10-clevis-net.conf" 0 "Add kernel command line for network and debug to dracut"
-        # Crucial: Regenerate initramfs to include all configs and custom modules
-        rlRun "dracut -f --regenerate-all" 0 "Regenerate initramfs to include Clevis and network settings"
+        # Crucial: Use --install to force the hook script and loopfile into initramfs
+        rlRun "dracut -f --regenerate-all --install \"${INITRAMFS_HOOK_SCRIPT}\" \"${PERSISTENT_LOOPFILE}\"" 0 "Regenerate initramfs with Clevis, network, and custom loop hook"
 
         rlRun "touch \"$COOKIE\"" 0 "Mark initial setup as complete"
         rlLogInfo "Initial setup complete. Triggering reboot via test runner."
@@ -219,11 +191,8 @@ EOF
       else # This block runs on subsequent boots after the initial setup
         rlLogInfo "Post-reboot: Verifying LUKS automatic unlock and mount."
 
-        # The custom dracut module should have already re-created the loop device
-        # and systemd-cryptsetup should have unlocked it using the crypttab entry.
-        # We just need to verify its state and get its current path for cleanup.
+        # Verify the loop device is active (should have been created by the initramfs hook)
         rlLogInfo "Verifying loop device and LUKS unlock status."
-        # This will get the current /dev/loopX path for the persistent file.
         LOOP_DEV=$(losetup -a | grep "${PERSISTENT_LOOPFILE}" | awk -F: '{print $1}')
         rlAssertNotEquals "Loop device for ${PERSISTENT_LOOPFILE} should be active" "" "${LOOP_DEV}"
         TARGET_DISK="${LOOP_DEV}" # Set TARGET_DISK for the rest of this phase and cleanup.
@@ -269,21 +238,22 @@ EOF
     fi
     rlRun "rm -f ${PERSISTENT_LOOPFILE}" ||: "Failed to remove loopfile."
 
-    # Clean up custom Dracut module
-    if [ -d "${DRACUT_CUSTOM_MODULE_BASEDIR}" ]; then # Check base dir
-        rlRun "rm -rf ${DRACUT_CUSTOM_MODULE_BASEDIR}" ||: "Failed to remove custom dracut module base directory."
+    # Clean up custom Dracut module files
+    if [ -f "${INITRAMFS_HOOK_SCRIPT}" ]; then
+        rlRun "rm -f ${INITRAMFS_HOOK_SCRIPT}" ||: "Failed to remove initramfs hook script."
     fi
+    # No longer removing DRACUT_CUSTOM_MODULE_BASEDIR as it's not created this way.
+    # dracut.conf.d files are handled separately below.
 
     # Clean up cookies and other persistent temporary files
     rlRun "rm -f \"$COOKIE\"" ||: "Failed to remove COOKIE."
     rlRun "rm -f ${PERSISTENT_ADV_FILE}" ||: "Failed to remove persistent advertisement file."
     rlRun "rm -f /etc/dracut.conf.d/10-clevis-net.conf" ||: "Failed to remove dracut network config."
     rlRun "rm -f /etc/dracut.conf.d/10-custom-modules.conf" ||: "Failed to remove custom dracut modules config."
-    rlRun "rm -f ${DRACUT_CONFIG_FILE}" ||: "Failed to remove custom dracut module config file."
+    rlRun "rm -f /etc/dracut.conf.d/99-loopluks.conf" ||: "Failed to remove custom dracut module config file." # This file is still created by `echo ... >`.
 
     # Remove the crypttab entry created by the test
     local LUKS_CLEANUP_UUID=""
-    # Attempt to get the UUID if the loop device is still active
     if [ -n "${LOOP_DEV}" ] && cryptsetup luksUUID "${LOOP_DEV}" &>/dev/null; then
         LUKS_CLEANUP_UUID=$(cryptsetup luksUUID "${LOOP_DEV}")
     fi
