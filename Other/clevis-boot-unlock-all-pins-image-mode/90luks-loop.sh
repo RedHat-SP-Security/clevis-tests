@@ -17,7 +17,7 @@ if [ -f "${PERSISTENT_LOOPFILE}" ]; then
     # Create the loop device. It will find a free /dev/loopX.
     LDEV=$(losetup -f --show "${PERSISTENT_LOOPFILE}")
     if [ -n "$LDEV" ]; then
-        echo "initramfs: losetup done: $LDEV for ${PERSISTENT_LOOPFILE}"
+        echo "initramfs: losetup done: \$LDEV for ${PERSISTENT_LOOPFILE}"
         # Important: Inform udev that a new block device is ready.
         # This is critical for systemd-cryptsetup to see it.
         udevadm settle --timeout=30 # Increased udev settle timeout
