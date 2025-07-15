@@ -116,7 +116,7 @@ ls -F /
 # Ensure the parent directory exists in initramfs as expected
 if [ ! -d "$(dirname ${PERSISTENT_LOOPFILE})" ]; then
     echo "initramfs: ERROR: Parent directory for ${PERSISTENT_LOOPFILE} does not exist!"
-    # Attempt to create, though inst_dir should have handled this if module-setup.sh was used
+    # Attempt to create, though --install should make parent directories if needed for files
     mkdir -p "$(dirname ${PERSISTENT_LOOPFILE})"
 fi
 
@@ -128,6 +128,7 @@ if [ -f "${PERSISTENT_LOOPFILE}" ]; then
     if [ -n "\$LDEV" ]; then
         echo "initramfs: losetup done: \$LDEV for ${PERSISTENT_LOOPFILE}"
         # Important: Inform udev that a new block device is ready.
+        # This is critical for systemd-cryptsetup to see it.
         udevadm settle --timeout=30 # Increased udev settle timeout
         udevadm trigger --action=add --subsystem=block
         echo "initramfs: udevadm done. Current devices:"
@@ -181,8 +182,11 @@ EOF
         rlRun "echo 'add_dracutmodules+=\" network crypt clevis \"' > /etc/dracut.conf.d/10-custom-modules.conf" 0 "Add custom dracut modules"
         rlRun "systemctl enable clevis-luks-askpass.path" 0 "Enable clevis-luks-askpass (if not already enabled by snippet)"
         rlRun "echo 'kernel_cmdline=\"rd.neednet=1 rd.info rd.debug\"' > /etc/dracut.conf.d/10-clevis-net.conf" 0 "Add kernel command line for network and debug to dracut"
-        # Crucial: Use --install to force the hook script and loopfile into initramfs
-        rlRun "dracut -f --regenerate-all --install \"${INITRAMFS_HOOK_SCRIPT}\" \"${PERSISTENT_LOOPFILE}\"" 0 "Regenerate initramfs with Clevis, network, and custom loop hook"
+        # Crucial: Use --force to rebuild current kernel's initramfs and --install to copy files/scripts.
+        # This replaces the need for custom module directories in dracut's search paths for this specific case.
+        # The syntax is `dracut --force --install <source> <destination_in_initramfs> ...`
+        rlRun "dracut --force --add-dracutmodules 'network crypt clevis' --install \"${INITRAMFS_HOOK_SCRIPT}\" \"/usr/lib/dracut/modules.d/90luks-loop.sh\" --install \"${PERSISTENT_LOOPFILE}\" \"${PERSISTENT_LOOPFILE}\" --no-shared-initrds" 0 "Regenerate initramfs with custom loop hook and persistent file"
+
 
         rlRun "touch \"$COOKIE\"" 0 "Mark initial setup as complete"
         rlLogInfo "Initial setup complete. Triggering reboot via test runner."
@@ -238,19 +242,17 @@ EOF
     fi
     rlRun "rm -f ${PERSISTENT_LOOPFILE}" ||: "Failed to remove loopfile."
 
-    # Clean up custom Dracut module files
+    # Clean up custom Dracut module files (the hook script itself)
     if [ -f "${INITRAMFS_HOOK_SCRIPT}" ]; then
         rlRun "rm -f ${INITRAMFS_HOOK_SCRIPT}" ||: "Failed to remove initramfs hook script."
     fi
-    # No longer removing DRACUT_CUSTOM_MODULE_BASEDIR as it's not created this way.
-    # dracut.conf.d files are handled separately below.
 
     # Clean up cookies and other persistent temporary files
     rlRun "rm -f \"$COOKIE\"" ||: "Failed to remove COOKIE."
     rlRun "rm -f ${PERSISTENT_ADV_FILE}" ||: "Failed to remove persistent advertisement file."
     rlRun "rm -f /etc/dracut.conf.d/10-clevis-net.conf" ||: "Failed to remove dracut network config."
     rlRun "rm -f /etc/dracut.conf.d/10-custom-modules.conf" ||: "Failed to remove custom dracut modules config."
-    rlRun "rm -f /etc/dracut.conf.d/99-loopluks.conf" ||: "Failed to remove custom dracut module config file." # This file is still created by `echo ... >`.
+    # The 99-loopluks.conf file is no longer used, removed from previous version.
 
     # Remove the crypttab entry created by the test
     local LUKS_CLEANUP_UUID=""
