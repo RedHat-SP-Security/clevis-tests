@@ -86,6 +86,10 @@ rlJournalStart
       rlLogInfo "Formatting ${TARGET_DISK} with LUKS2."
       rlRun "echo -n 'password' | cryptsetup luksFormat ${TARGET_DISK} --type luks2 -" 0 "Format disk with LUKS2"
 
+      # Get the UUID of the LUKS device for crypttab
+      LUKS_UUID=$(cryptsetup luksUUID "${TARGET_DISK}")
+      rlAssertNotEquals "LUKS UUID should not be empty" "" "${LUKS_UUID}"
+
       rlLogInfo "Opening LUKS device and creating filesystem."
       rlRun "echo -n 'password' | cryptsetup luksOpen ${TARGET_DISK} myluksdev -" 0 "Open LUKS device"
       rlRun "mkfs.ext4 /dev/mapper/myluksdev" 0 "Create ext4 filesystem on LUKS device"
@@ -103,29 +107,36 @@ rlJournalStart
       # Ensure correct JSON syntax and use persistent adv path.
       rlRun "clevis luks bind -d ${TARGET_DISK} sss '{\"t\":2,\"pins\":{\"tang\":[{\"url\":\"http://${TANG_SERVER}\",\"adv\":\"/var/opt/adv.jws\"}], \"tpm2\": {\"pcr_bank\":\"sha256\", \"pcr_ids\":\"0,7\"}}}' <<< 'password'" 0 "Bind Clevis to LUKS device with Tang and TPM2"
 
+      # Add entry to /etc/crypttab for automatic unlock at boot
+      # /etc is usually a writable overlay in Image Mode systems.
+      rlLogInfo "Adding entry to /etc/crypttab for automatic LUKS unlock."
+      # The 'luks' option ensures systemd-cryptsetup uses the LUKS device handler.
+      # The 'clevis' option ensures clevis is used for unlocking.
+      # The 'nofail' option prevents boot from hanging if unlock fails (good for tests).
+      rlRun "echo 'myluksdev UUID=${LUKS_UUID} none luks,clevis,nofail' >> /etc/crypttab" 0 "Add crypttab entry"
+
       rlLogInfo "Enabling clevis-luks-askpass and configuring dracut for network."
-      # These changes are expected to persist across reboots, ideally baked into the image
-      # or handled by a persistent post-install script for Image Mode.
       rlRun "systemctl enable clevis-luks-askpass.path" 0 "Enable clevis-luks-askpass (if not already enabled by snippet)"
       rlRun "mkdir -p /etc/dracut.conf.d/" 0 "Ensure dracut.conf.d exists (writable overlay expected)"
       rlRun "echo 'kernel_cmdline=\"rd.neednet=1\"' > /etc/dracut.conf.d/10-clevis-net.conf" 0 "Add kernel command line for network to dracut (writable overlay expected)"
+      # Crucial: Regenerate initramfs to include crypttab and updated Clevis modules
       rlRun "dracut -f --regenerate-all" 0 "Regenerate initramfs to include Clevis and network settings"
 
       rlRun "touch \"$COOKIE\"" 0 "Mark initial setup as complete"
       rlLogInfo "Initial setup complete. Triggering reboot via test runner."
-      # Exit successfully. Your test runner (tmt/rhts) should be configured
-      # to perform the reboot and re-execute this test script afterward.
       rhts-reboot # Keeping rhts-reboot as per your last snippet.
 
     else # This block runs on subsequent boots after the initial setup
       rlLogInfo "Post-reboot: Verifying LUKS automatic unlock and mount."
 
-      # Re-create the loop device from its persistent backing file.
-      rlLogInfo "Re-creating loop device for verification."
+      # For verification: we need to re-create the loop device from its persistent backing file.
+      # systemd-cryptsetup should have automatically unlocked it if /etc/crypttab was correct.
+      rlLogInfo "Re-creating loop device for verification and checking status."
       rlRun "LOOP_DEV=\$(losetup -f --show /var/opt/loopfile)" 0 "Re-create loop device from persistent file for verification"
       TARGET_DISK="${LOOP_DEV}" # Ensure TARGET_DISK is set for verification steps.
 
       # Verify the LUKS device is automatically unlocked and mounted.
+      # Now, lsblk should show /dev/mapper/myluksdev if it was unlocked at boot.
       rlRun "lsblk | grep myluksdev" 0 "Verify myluksdev is present and unlocked"
       rlRun "mount | grep /mnt/luks_test" 0 "Verify /mnt/luks_test is mounted"
       rlRun "cat /mnt/luks_test/testfile.txt | grep 'Test data for LUKS device'" 0 "Verify data integrity on LUKS device"
@@ -148,6 +159,7 @@ rlJournalStart
     if mountpoint -q /mnt/luks_test; then
       rlRun "umount /mnt/luks_test" ||: "Failed to unmount /mnt/luks_test, continuing cleanup."
     fi
+    # Close LUKS device (it might be open if the test failed before auto-unlock or during verification)
     if cryptsetup status myluksdev &>/dev/null; then
       rlRun "cryptsetup luksClose myluksdev" ||: "Failed to close myluksdev, continuing cleanup."
     fi
@@ -160,10 +172,11 @@ rlJournalStart
 
     # Clean up cookies and temporary files in /var/opt/
     rlRun "rm -f \"$COOKIE\"" ||: "Failed to remove COOKIE."
-    # REBOOT_COOKIE removed from script, no need to clean up here.
     rlRun "rm -f /var/opt/adv.jws" ||: "Failed to remove /var/opt/adv.jws."
-    rlRun "rm -f /etc/dracut.conf.d/10-clevis-net.conf" ||: "Failed to remove dracut config."
+    rlRun "rm -f /etc/dracut.conf.d/10-clevis-net.conf" ||: "Failed to remove dracut network config."
+    rlRun "sed -i '/myluksdev/d' /etc/crypttab" ||: "Failed to remove crypttab entry."
     # Regenerate initramfs to remove changes made by the test for clean state.
+    # This is important to ensure crypttab changes are reverted for subsequent test runs.
     rlRun "dracut -f --regenerate-all" ||: "Failed to regenerate initramfs during cleanup."
   rlPhaseEnd
 rlJournalEnd
