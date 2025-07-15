@@ -194,9 +194,8 @@ EOF_CONF_NET
         #    The hook script is copied to a standard cmdline hook location within initramfs.
         #    The loopfile is copied to its original persistent path within initramfs.
         # Ensure EOF_CONF_INSTALL is on a line by itself with no leading/trailing whitespace
-        cat << 'EOF_CONF_INSTALL' > "/etc/dracut.conf.d/99-loopluks-install.conf"
-install_items+="/var/opt/90luks-loop.sh ${INITRAMFS_HOOK_DEST}" # Explicitly copy to the correct hook path
-install_items+="${PERSISTENT_LOOPFILE} /${PERSISTENT_LOOPFILE#/}"
+      cat <<EOF_CONF_INSTALL > "/etc/dracut.conf.d/99-loopluks-install.conf"
+install_items+="/var/opt/loopfile /var/opt/90luks-loop.sh ${INITRAMFS_HOOK_DEST}"
 EOF_CONF_INSTALL
         # Removed chmod +x here - these are config files, not scripts.
 
