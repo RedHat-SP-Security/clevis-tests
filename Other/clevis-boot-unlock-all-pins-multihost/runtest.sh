@@ -188,8 +188,6 @@ function Tang_Server_Setup() {
 # --- Main Execution Logic ---
 rlJournalStart
     rlPhaseStartSetup "Global Setup"
-        rlRun 'rlImport "sync"' || rlDie "Cannot import sync library"
-        # Get IPs for all roles so they are available everywhere
         assign_roles
     rlPhaseEnd
 
