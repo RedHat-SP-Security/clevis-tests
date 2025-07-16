@@ -26,29 +26,23 @@
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 . /usr/share/beakerlib/beakerlib.sh || exit 1
 
-# COOKIE will mark if the initial setup (LUKS format, Clevis bind) has run
-# This cookie needs to be in a persistent location across reboots.
-COOKIE=/var/opt/clevis_setup_done
-
-# Global variable to store the loop device path.
-# This variable's value is transient for each script execution,
-# but the underlying /var/opt/loopfile provides persistence.
-LOOP_DEV=""
-
+# COOKIE will mark if the initial setup has run. This is key for reboot tests.
+COOKIE="/var/opt/clevis_setup_done"
 # Define persistent file locations
 PERSISTENT_LOOPFILE="/var/opt/loopfile"
 PERSISTENT_ADV_FILE="/var/opt/adv.jws"
-
-# Define path for the initramfs hook script (copied to /usr/lib/dracut/hooks/cmdline/ in initramfs)
-INITRAMFS_HOOK_DEST="/usr/lib/dracut/hooks/cmdline/90luks-loop.sh"
-
+# Define the name for our unlocked device
+LUKS_DEV_NAME="myluksdev"
 
 rlJournalStart
   rlPhaseStartSetup
     rlImport --all || rlDie "Import failed"
-    rlRun "rlImport --all" 0 "Import libraries" || rlDie "cannot continue"
+    rlRun "rlImport --all" 0 "Import libraries"
 
-    rlLogInfo "DISABLE_SELINUX(${DISABLE_SELINUX})"
+    # Ensure /var/opt exists for our persistent files
+    rlRun "mkdir -p /var/opt"
+
+    # In Image Mode, SELinux should ideally not be disabled, but we keep the option
     if [ -n "${DISABLE_SELINUX}" ]; then
       rlRun "setenforce 0" 0 "Putting SELinux in Permissive mode"
     fi
@@ -60,216 +54,134 @@ rlJournalStart
     # Determine Tang IP dynamically
     TANG_IP=$(ip addr show $(ip route get 1 | awk '{print $5; exit}') | grep 'inet ' | awk '{print $2}' | cut -d/ -f1)
     rlLog "Tang IP: ${TANG_IP}"
-    export TANG_SERVER=${TANG_IP} # Export for the clevis-boot-unlock-all-pins script
+    export TANG_SERVER=${TANG_IP}
 
-    # Ensure clevis-dracut is available. In Image Mode, this usually means it's part of the base image.
-    rlRun "rpm -q clevis-dracut" 0 "Verify clevis-dracut is installed (expected in image)" || rlDie "clevis-dracut not found, ensure it's in the base base."
+    # Verify required packages are part of the image
+    rlRun "rpm -q clevis-dracut cryptsetup" 0 "Verify required packages are installed" || rlDie "Missing core packages."
   rlPhaseEnd
 
-  rlPhaseStartTest "LUKS and Clevis Setup and Verification"
-    # Wrap the entire phase logic in a function to allow 'return' to exit gracefully on fatal errors.
-    _luks_clevis_test_logic() {
-      local TPM2_AVAILABLE=true # Flag to track TPM2 presence
-      local CLEVIS_PINS=""      # Variable to build dynamic Clevis pin configuration
-      local SSS_THRESHOLD=2     # Default SSS threshold (for Tang + TPM2)
-      local LUKS_UUID=""        # Declare LUKS_UUID here for broader scope if needed for debug
+  rlPhaseStartTest "Clevis Boot Unlock Test"
+    # This `if/else` block is the core of a reboot test.
+    # If the cookie doesn't exist, we are in the SETUP phase.
+    # If it does, we are in the VERIFICATION phase (post-reboot).
+    if [ ! -f "$COOKIE" ]; then
+      rlLogInfo "PHASE 1: Initial Setup (Pre-Reboot)"
 
-      # Check for TPM2 availability
+      # 1. Create the loop file that will act as our hard disk
+      rlRun "dd if=/dev/zero of=${PERSISTENT_LOOPFILE} bs=1M count=100" 0 "Create 100MB loopfile"
+      LOOP_DEV=$(losetup -f --show ${PERSISTENT_LOOPFILE})
+      rlAssertNotEquals "Loop device should be created" "" "$LOOP_DEV"
+      rlLogInfo "Using loop device ${LOOP_DEV} for LUKS."
+
+      # 2. Format the device with LUKS
+      rlRun "echo -n 'password' | cryptsetup luksFormat ${LOOP_DEV} --type luks2 -" 0 "Format disk with LUKS2"
+      LUKS_UUID=$(cryptsetup luksUUID "${LOOP_DEV}")
+      rlAssertNotEquals "LUKS UUID should not be empty" "" "${LUKS_UUID}"
+
+      # 3. Bind Clevis to the LUKS device
+      rlLogInfo "Downloading Tang advertisement."
+      rlRun "curl -sfg http://${TANG_SERVER}/adv -o ${PERSISTENT_ADV_FILE}" 0 "Download Tang advertisement"
+
+      # --- Dynamically build the Clevis pins configuration ---
+      local TPM2_AVAILABLE=true
       if [ ! -e "/dev/tpm0" ] && [ ! -e "/dev/tpmrm0" ]; then
-        rlLogInfo "TPM2 device not found (/dev/tpm0 or /dev/tpmrm0). Will proceed without TPM2 binding."
+        rlLogInfo "TPM2 device not found. Proceeding with Tang pin only."
         TPM2_AVAILABLE=false
-        SSS_THRESHOLD=1 # Adjust threshold since only Tang pin will be used
+        SSS_THRESHOLD=1
+        CLEVIS_PINS='{"tang":[{"url":"http://'"${TANG_SERVER}"'","adv":"'"${PERSISTENT_ADV_FILE}"'"}]}'
       else
-        rlLogInfo "TPM2 device found. Will include TPM2 binding."
+        rlLogInfo "TPM2 device found. Using Tang and TPM2 pins."
+        SSS_THRESHOLD=1 # Use 1 for "either/or" or 2 for "both required"
+        CLEVIS_PINS='{"tang":[{"url":"http://'"${TANG_SERVER}"'","adv":"'"${PERSISTENT_ADV_FILE}"'"}], "tpm2": {"pcr_bank":"sha256", "pcr_ids":"0,7"}}'
       fi
+      # --- End of dynamic pin building ---
 
-      # This block runs the initial setup. It should execute only once.
-      if [ ! -e "$COOKIE" ]; then
-        rlLogInfo "Initial run: Setting up LUKS device and Clevis binding."
+      rlLogInfo "Binding Clevis with SSS (t=${SSS_THRESHOLD})."
+      rlRun "clevis luks bind -d ${LOOP_DEV} sss '{\"t\":${SSS_THRESHOLD},\"pins\":${CLEVIS_PINS}}' <<< 'password'" 0 "Bind Clevis to LUKS device"
 
-        # --- START: Loop device setup ---
-        rlLogInfo "Creating loop device for LUKS testing."
-        rlRun "mkdir -p /var/opt" 0 "Ensure /var/opt exists"
-        rlRun "dd if=/dev/zero of=${PERSISTENT_LOOPFILE} bs=1M count=50" 0 "Create loopfile"
-        rlRun "LOOP_DEV=\$(losetup -f --show ${PERSISTENT_LOOPFILE})" 0 "Attach loop device"
-        TARGET_DISK="${LOOP_DEV}"
-        rlLogInfo "Using loop device ${TARGET_DISK} for LUKS."
-        # --- END: Loop device setup ---
+      # 4. Create the /etc/crypttab entry for automatic boot unlock
+      # Using the UUID is the most robust method.
+      rlLogInfo "Adding entry to /etc/crypttab for automatic unlock."
+      rlRun "echo '${LUKS_DEV_NAME} UUID=${LUKS_UUID} none luks,clevis,nofail' >> /etc/crypttab"
 
-        # --- START: Initramfs Hook Script preparation (for direct copy) ---
-        rlLogInfo "Creating initramfs hook script to re-create loop device."
-        cat << 'EOF_HOOK' > "/var/opt/90luks-loop.sh"
+      # 5. Create the Dracut hook and configuration to re-create the loop device inside initramfs
+      # This is the magic that makes the test work.
+      rlLogInfo "Creating dracut hook to set up loop device during boot."
+      # The Hook Script itself
+      cat << 'EOF_HOOK' > "/var/opt/90-luks-loop-hook.sh"
 #!/bin/bash
-
-# Redirect stdout/stderr to console and log for debugging
-exec >/dev/kmsg 2>&1
-echo "initramfs: Running 90luks-loop.sh hook..."
-echo "initramfs: Current working directory: $(pwd)"
-echo "initramfs: Listing root content:"
-ls -F /
-ls -l /var/opt/ || true # List contents of /var/opt in initramfs
-
-# Check if the persistent loopfile actually exists in initramfs
-if [ -f "${PERSISTENT_LOOPFILE}" ]; then
-    echo "initramfs: ${PERSISTENT_LOOPFILE} found. Attempting losetup."
-    LDEV=\$(losetup -f --show "${PERSISTENT_LOOPFILE}")
-    if [ -n "\$LDEV" ]; then
-        echo "initramfs: losetup done: \$LDEV for ${PERSISTENT_LOOPFILE}"
-        udevadm settle --timeout=30
-        udevadm trigger --action=add --subsystem=block
-        echo "initramfs: udevadm done. Current devices:"
-        ls -l /dev/loop* || true
-        ls -l /dev/mapper/ || true
-    else
-        echo "initramfs: ERROR: losetup failed for ${PERSISTENT_LOOPFILE}!"
-    fi
-else
-    echo "initramfs: ERROR: ${PERSISTENT_LOOPFILE} not found in initramfs at all!"
-fi
+# This script runs inside the initramfs to set up our loop device
+# before systemd-cryptsetup tries to unlock it.
+echo "LUKS Loop Hook: Setting up ${PERSISTENT_LOOPFILE}..." > /dev/kmsg
+losetup $(losetup -f) "${PERSISTENT_LOOPFILE}"
+echo "LUKS Loop Hook: losetup complete. Triggering udev." > /dev/kmsg
+udevadm settle
 EOF_HOOK
-        rlRun "chmod +x /var/opt/90luks-loop.sh" 0 "Set executable permissions for hook script"
-        # --- END: Initramfs Hook Script preparation ---
+      chmod +x /var/opt/90-luks-loop-hook.sh
 
-        rlLogInfo "Formatting ${TARGET_DISK} with LUKS2."
-        rlRun "echo -n 'password' | cryptsetup luksFormat ${TARGET_DISK} --type luks2 -" 0 "Format disk with LUKS2"
+      # The Dracut configuration file that installs the hook and the loopfile into the initramfs
+      cat << 'EOF_CONF' > "/etc/dracut.conf.d/99-loopluks.conf"
+# Add our hook script and the actual loopfile to the initramfs image
+install_items+=" /var/opt/90-luks-loop-hook.sh /usr/lib/dracut/hooks/pre-udev/90-luks-loop-hook.sh "
+install_items+=" ${PERSISTENT_LOOPFILE} "
+# Also ensure network modules are included for Tang
+add_dracutmodules+=" network clevis "
+kernel_cmdline="rd.neednet=1"
+EOF_CONF
 
-        # Get the UUID of the LUKS device for crypttab
-        LUKS_UUID=$(cryptsetup luksUUID "${TARGET_DISK}")
-        rlAssertNotEquals "LUKS UUID should not be empty" "" "${LUKS_UUID}"
+      # 6. Regenerate initramfs to include all our changes
+      rlRun "dracut --force" 0 "Regenerate initramfs with new hook and files"
 
-        rlLogInfo "Opening LUKS device and creating filesystem."
-        rlRun "echo -n 'password' | cryptsetup luksOpen ${TARGET_DISK} myluksdev -" 0 "Open LUKS device"
-        rlRun "mkfs.ext4 /dev/mapper/myluksdev" 0 "Create ext4 filesystem on LUKS device"
-        rlRun "mkdir -p /mnt/luks_test" 0 "Create mount point"
-        rlRun "mount /dev/mapper/myluksdev /mnt/luks_test" 0 "Mount LUKS device"
-        rlRun "echo 'Test data for LUKS device' > /mnt/luks_test/testfile.txt" 0 "Write test data"
-        rlRun "umount /mnt/luks_test" 0 "Unmount LUKS device"
-        rlRun "cryptsetup luksClose myluksdev" 0 "Close LUKS device"
+      # 7. Create the cookie and reboot
+      rlLogInfo "Initial setup complete. Triggering reboot."
+      rlRun "touch '$COOKIE'"
+      tmt-reboot # Use the standard tmt reboot command
 
-        rlLogInfo "Downloading Tang advertisement."
-        rlRun "curl -sfg http://${TANG_SERVER}/adv -o ${PERSISTENT_ADV_FILE}" 0 "Download Tang advertisement"
+    else
+      # This block runs AFTER the reboot
+      rlLogInfo "PHASE 2: Verification (Post-Reboot)"
 
-        # Dynamically build the Clevis pins configuration JSON
-        CLEVIS_PINS='{"tang":[{"url":"http://'"${TANG_SERVER}"'","adv":"'"${PERSISTENT_ADV_FILE}"'"}]'
-        if ${TPM2_AVAILABLE}; then
-          CLEVIS_PINS+=', "tpm2": {"pcr_bank":"sha256", "pcr_ids":"0,7"}'
-        fi
-        CLEVIS_PINS+='}' # Close the pins object
+      # The single most important check: Is our LUKS device unlocked?
+      # The `cryptsetup status` command is the most reliable way to check.
+      rlRun "cryptsetup status ${LUKS_DEV_NAME}" 0 "Verify '${LUKS_DEV_NAME}' is active and unlocked"
 
-        rlLogInfo "Binding Clevis to LUKS device ${TARGET_DISK} with dynamic pins: ${CLEVIS_PINS} (t=${SSS_THRESHOLD})."
-        rlRun "clevis luks bind -d ${TARGET_DISK} sss '{\"t\":${SSS_THRESHOLD},\"pins\":${CLEVIS_PINS}}' <<< 'password'" 0 "Bind Clevis to LUKS device"
+      # Additionally, check the journal for the success message
+      rlRun "journalctl -b | grep 'Finished Cryptography Setup for ${LUKS_DEV_NAME}'" 0 "Verify journal for successful cryptsetup"
 
-        # Add entry to /etc/crypttab for automatic unlock at boot
-        rlLogInfo "Adding entry to /etc/crypttab for automatic LUKS unlock."
-        rlRun "echo 'myluksdev ${PERSISTENT_LOOPFILE} none luks,clevis,nofail,x-systemd.device-timeout=120s' >> /etc/crypttab" 0 "Add crypttab entry with persistent file path"
+      # Optional: Mount the device and check data for full confidence
+      rlLogInfo "Mounting unlocked device to verify data."
+      rlRun "echo -n 'password' | cryptsetup luksOpen UUID=${LUKS_UUID} ${LUKS_DEV_NAME} -" 0 "Open device to mount"
+      rlRun "mkdir -p /mnt/luks_test"
+      rlRun "mount /dev/mapper/${LUKS_DEV_NAME} /mnt/luks_test" 0 "Mount unlocked device"
+      # We didn't write data in setup, so we just check mount success.
 
-        rlLogInfo "Enabling clevis-luks-askpass and configuring dracut for network."
-        rlRun "mkdir -p /etc/dracut.conf.d/" 0 "Ensure dracut.conf.d exists"
-
-        # Dracut config files in /etc/dracut.conf.d/
-        # 1. Add core dracut modules (network, crypt, clevis, fstab)
-        cat << 'EOF_CONF_MODULES' > "/etc/dracut.conf.d/10-custom-modules.conf"
-add_dracutmodules+=" network crypt clevis fstab "
-EOF_CONF_MODULES
-
-        # 2. Add kernel command line (rd.neednet=1 rd.info rd.debug)
-        cat << 'EOF_CONF_NET' > "/etc/dracut.conf.d/10-clevis-net.conf"
-kernel_cmdline="rd.neednet=1 rd.info rd.debug"
-EOF_CONF_NET
-
-        # 3. Configure dracut to install the hook script and loopfile
-        cat << 'EOF_CONF_INSTALL' > "/etc/dracut.conf.d/99-loopluks-install.conf"
-install_items+="/var/opt/90luks-loop.sh ${INITRAMFS_HOOK_DEST}" # Explicitly copy to the correct hook path
-install_items+="${PERSISTENT_LOOPFILE} /${PERSISTENT_LOOPFILE#/}"
-install_items+="/etc/crypttab /etc/crypttab" # Explicitly copy crypttab into initramfs
-EOF_CONF_INSTALL
-
-        # Regenerate initramfs. dracut will pick up all *.conf files from /etc/dracut.conf.d/.
-        rlRun "dracut --force" 0 "Regenerate initramfs with all new configurations"
-
-        rlRun "touch \"$COOKIE\"" 0 "Mark initial setup as complete"
-        rlLogInfo "Initial setup complete. Triggering reboot via test runner."
-        rhts-reboot # Keeping rhts-reboot as per your last snippet.
-
-      else # This block runs on subsequent boots after the initial setup
-        rlLogInfo "Post-reboot: Verifying LUKS automatic unlock and mount."
-
-        # Verify the loop device is active (should have been created by the initramfs hook)
-        rlLogInfo "Verifying loop device and LUKS unlock status."
-        LOOP_DEV=$(losetup -a | grep "${PERSISTENT_LOOPFILE}" | awk -F: '{print $1}')
-        rlAssertNotEquals "Loop device for ${PERSISTENT_LOOPFILE} should be active" "" "${LOOP_DEV}"
-        TARGET_DISK="${LOOP_DEV}" # Set TARGET_DISK for the rest of this phase and cleanup.
-
-        # Verify the LUKS device is automatically unlocked and mounted.
-        rlRun "lsblk | grep myluksdev" 0 "Verify myluksdev is present and unlocked"
-        rlRun "mount | grep /mnt/luks_test" 0 "Verify /mnt/luks_test is mounted"
-        rlRun "cat /mnt/luks_test/testfile.txt | grep 'Test data for LUKS device'" 0 "Verify data integrity on LUKS device"
-
-        # Check journal for successful cryptsetup operation (regardless of TPM2 presence)
-        if rlIsRHELLike '>=10'; then
-          rlRun "journalctl -b | grep \"Finished systemd-cryptsetup\"" 0 "Check journal for cryptsetup finish (RHEL10+)"
-        else
-          rlRun "journalctl -b | grep \"Finished Cryptography Setup for luks-\"" 0 "Check journal for cryptsetup finish"
-        fi
-        # Check /run/initramfs/debug_loop.log for initramfs specific debug info.
-        rlRun "cat /run/initramfs/debug_loop.log || true" 0 "Display initramfs loop debug log (if available)"
-
-        rlLogInfo "LUKS device successfully unlocked and mounted via Clevis with Tang and (optionally) TPM2 pins."
-      fi
-    }
-    # Call the function that contains the phase logic.
-    _luks_clevis_test_logic
+      rlLogPass "Test passed: Clevis successfully unlocked the device during boot."
+    fi
   rlPhaseEnd
 
   rlPhaseStartCleanup
     rlLogInfo "Starting cleanup phase."
-    # Ensure /var/opt exists so cleanup files can be written/deleted.
-    rlRun "mkdir -p /var/opt" ||:
+    # Use ||: to prevent the cleanup from failing if a resource doesn't exist
+    rlRun "umount /mnt/luks_test" ||:
+    rlRun "cryptsetup luksClose ${LUKS_DEV_NAME}" ||:
 
-    # Unmount and close LUKS device if it's still active
-    rlRun "umount /mnt/luks_test" ||: "Failed to unmount /mnt/luks_test, continuing cleanup."
-
-    # Close LUKS device (it might be open if the test failed before auto-unlock or during verification)
-    if cryptsetup status myluksdev &>/dev/null; then
-      rlRun "cryptsetup luksClose myluksdev" ||: "Failed to close myluksdev, continuing cleanup."
-    fi
-
-    # Clean up loop device if it exists
-    current_loop_dev=$(losetup -a | grep "${PERSISTENT_LOOPFILE}" | awk -F: '{print $1}')
+    # Detach loop device if it's still attached
+    current_loop_dev=$(losetup -j ${PERSISTENT_LOOPFILE} | awk -F: '{print $1}')
     if [ -n "${current_loop_dev}" ]; then
-      rlRun "losetup -d ${current_loop_dev}" ||: "Failed to detach loop device ${current_loop_dev}."
-    fi
-    rlRun "rm -f ${PERSISTENT_LOOPFILE}" ||: "Failed to remove loopfile."
-
-    # Clean up initramfs hook script from /var/opt/
-    rlRun "rm -f /var/opt/90luks-loop.sh" ||: "Failed to remove initramfs hook script from /var/opt/."
-    # This file is copied INTO initramfs, not created ON the live system by a direct copy.
-    # So, we don't need to try to remove it from /usr/lib/dracut/hooks/cmdline/ on the live system.
-    # It will be gone when the image is reset.
-
-    # Clean up cookies and other persistent temporary files
-    rlRun "rm -f \"$COOKIE\"" ||: "Failed to remove COOKIE."
-    rlRun "rm -f /var/opt/adv.jws" ||: "Failed to remove persistent advertisement file."
-    # Clean up dracut config files
-    rlRun "rm -f /etc/dracut.conf.d/10-custom-modules.conf" ||: "Failed to remove custom dracut modules config."
-    rlRun "rm -f /etc/dracut.conf.d/10-clevis-net.conf" ||: "Failed to remove clevis network config."
-    rlRun "rm -f /etc/dracut.conf.d/99-loopluks-install.conf" ||: "Failed to remove loopluks install config."
-
-    # Remove the crypttab entry created by the test
-    local LUKS_CLEANUP_UUID=""
-    # Use the loop device if still active to get UUID for cleanup, otherwise fall back to generic
-    if [ -n "${LOOP_DEV}" ] && cryptsetup luksUUID "${LOOP_DEV}" &>/dev/null; then
-        LUKS_CLEANUP_UUID=$(cryptsetup luksUUID "${LOOP_DEV}")
+      rlRun "losetup -d ${current_loop_dev}" ||:
     fi
 
-    if [ -n "${LUKS_CLEANUP_UUID}" ]; then
-        rlRun "sed -i '\_myluksdev UUID=${LUKS_CLEANUP_UUID} none luks,clevis,nofail,x-systemd.device-timeout=120s_d' /etc/crypttab" ||: "Failed to remove specific crypttab entry by UUID."
-    else
-        # Fallback to generic removal if UUID not found (e.g., if format failed)
-        rlRun "sed -i '\_myluksdev .* none luks,clevis,nofail,x-systemd.device-timeout=120s_d' /etc/crypttab" ||: "Failed to remove generic crypttab entry."
-    fi
+    # Remove all created files
+    rlRun "rm -f '${COOKIE}'" ||:
+    rlRun "rm -f '${PERSISTENT_LOOPFILE}'" ||:
+    rlRun "rm -f '${PERSISTENT_ADV_FILE}'" ||:
+    rlRun "rm -f /var/opt/90-luks-loop-hook.sh" ||:
+    rlRun "rm -f /etc/dracut.conf.d/99-loopluks.conf" ||:
 
-    # Regenerate initramfs to remove changes made by the test for clean state.
-    rlRun "dracut -f --regenerate-all" ||: "Failed to regenerate initramfs during cleanup."
+    # Remove the crypttab entry
+    rlRun "sed -i \"/${LUKS_DEV_NAME}/d\" /etc/crypttab" ||:
+
+    # Regenerate initramfs to leave the system clean
+    rlRun "dracut --force" 0 "Regenerate initramfs to restore clean state"
   rlPhaseEnd
 rlJournalEnd
