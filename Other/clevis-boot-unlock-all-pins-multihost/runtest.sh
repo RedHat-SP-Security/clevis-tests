@@ -38,8 +38,29 @@ PERSISTENT_ADV_FILE="/var/opt/adv.jws"
 LUKS_DEV_NAME="myluksdev"
 
 
-# --- IP Assignment ---
-# This function resolves a hostname to an IP address.
+function assign_roles() {
+    if [ -n "${TMT_TOPOLOGY_BASH}" ] && [ -f "${TMT_TOPOLOGY_BASH}" ]; then
+        cat "${TMT_TOPOLOGY_BASH}"
+        . "${TMT_TOPOLOGY_BASH}"
+
+        CLEVIS_KEY=${TMT_ROLES["client"]}
+        TANG_KEY=${TMT_ROLES["server"]}
+
+        export CLEVIS=${TMT_GUESTS["clevis.hostname"]}
+        export TANG=${TMT_GUESTS["tang.hostname"]}
+
+        MY_IP="${TMT_GUEST['hostname']}"
+
+    elif [ -n "$SERVERS" ]; then
+        export CLEVIS=$( echo "$SERVERS $CLIENTS" | awk '{ print $1 }')
+        export TANG=$( echo "$SERVERS $CLIENTS" | awk '{ print $2 }')
+    fi
+
+    [ -z "$MY_IP" ] && MY_IP=$( hostname -I | awk '{ print $1 }' )
+    [ -n "$CLEVIS" ] && export CLEVIS_IP=$( get_IP "$CLEVIS" )
+    [ -n "$TANG" ] && export TANG_IP=$( get_IP "$TANG" )
+}
+
 function get_IP() {
     if echo "$1" | grep -E -q '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+'; then
         echo "$1"
@@ -47,35 +68,6 @@ function get_IP() {
         getent hosts "$1" | awk '{ print $1 }' | head -n 1
     fi
 }
-
-# This function reads the tmt topology and gets IPs for all roles.
-function assign_roles() {
-    if [ -n "${TMT_TOPOLOGY_BASH}" ] && [ -f "${TMT_TOPOLOGY_BASH}" ]; then
-        rlLog "Sourcing roles from ${TMT_TOPOLOGY_BASH}"
-        # Sourcing this file makes TMT_ROLES and TMT_GUESTS available
-        . "${TMT_TOPOLOGY_BASH}"
-
-        # Get the guest name assigned to the 'client' role
-        local client_guest_name=${TMT_ROLES["client"]}
-        # Use that guest name to look up its hostname
-        local clevis_hostname=${TMT_GUESTS[$client_guest_name]['hostname']}
-        # Get the IP from the hostname
-        export CLEVIS_IP=$(get_IP "$clevis_hostname")
-
-        # Repeat for the server
-        local server_guest_name=${TMT_ROLES["server"]}
-        local tang_hostname=${TMT_GUESTS[$server_guest_name]['hostname']}
-        export TANG_IP=$(get_IP "$tang_hostname")
-
-        rlAssertNotEmpty "Could not resolve client IP" "$CLEVIS_IP"
-        rlAssertNotEmpty "Could not resolve server IP" "$TANG_IP"
-
-        rlLog "IPs discovered: Client=${CLEVIS_IP}, Server=${TANG_IP}"
-    else
-        rlDie "FATAL: Could not find TMT topology information. This test must be run in a multihost environment."
-    fi
-}
-
 
 # --- Clevis Client Logic ---
 # This function contains all steps that run on the Clevis client machine.
@@ -191,14 +183,14 @@ rlJournalStart
         assign_roles
     rlPhaseEnd
 
-    # Use the TMT_GUEST_ROLE variable for clear and robust role detection
-    if [ "$TMT_GUEST_ROLE" == "client" ]; then
-        rlLog "This machine is the CLIENT. Running Clevis test logic."
+    if echo " $HOSTNAME $MY_IP " | grep -q " ${CLEVIS} "; then
         Clevis_Client_Test
-    elif [ "$TMT_GUEST_ROLE" == "server" ]; then
-        rlLog "This machine is the SERVER. Running Tang setup logic."
+    elif echo " $HOSTNAME $MY_IP " | grep -q " ${TANG} "; then
         Tang_Server_Setup
     else
-        rlFail "Unknown role: '$TMT_GUEST_ROLE' for host $(hostname)."
+        rlPhaseStartTest
+            rlFail "Unknown role"
+        rlPhaseEnd
     fi
+
 rlJournalEnd
