@@ -1,0 +1,17 @@
+summary: Multihost Clevis and Tang functionality test
+description: |
+  This test validates the interaction between Clevis and Tang components in a multihost setup.
+
+contact: Adam Prikryl <aprikryl@redhat.com>
+test: ./runtest.sh
+required:
+  - clevis
+  - clevis-luks
+  - cryptsetup
+  - tang
+  - curl
+  - url: https://github.com/RedHat-SP-Security/keylime-tests.git
+    name: /Library/sync
+    type: library
+
+duration: 5m
