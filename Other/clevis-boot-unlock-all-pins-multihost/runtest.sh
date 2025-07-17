@@ -37,6 +37,9 @@ PERSISTENT_ADV_FILE="/var/opt/adv.jws"
 # Define the name for our unlocked device
 LUKS_DEV_NAME="myluksdev"
 
+
+# --- IP Assignment (Pattern from Keylime example) ---
+# This function resolves a hostname to an IP address.
 function get_IP() {
     if echo "$1" | grep -E -q '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+'; then
         echo "$1"
@@ -117,6 +120,7 @@ function Clevis_Client_Test() {
             fi
 
             rlLogInfo "Binding Clevis with SSS config: ${SSS_CONFIG}"
+            # Add the '-f' flag to make the command non-interactive
             rlRun "clevis luks bind -f -d ${LOOP_DEV} sss '${SSS_CONFIG}' <<< 'password'" 0 "Bind Clevis to LUKS device"
 
             rlLogInfo "Adding entry to /etc/crypttab for automatic unlock."
@@ -197,6 +201,7 @@ function Tang_Server_Setup() {
 # --- Main Execution Logic ---
 rlJournalStart
     rlPhaseStartSetup "Global Setup"
+        rlRun 'rlImport "sync"' || rlDie "Cannot import sync library"
         assign_roles
     rlPhaseEnd
 
