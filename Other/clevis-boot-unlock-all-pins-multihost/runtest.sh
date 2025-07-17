@@ -191,17 +191,13 @@ rlJournalStart
         assign_roles
     rlPhaseEnd
 
-    case "${TMT_GUEST[role]}" in
-        client)
-            rlLog "This machine's role is CLIENT. Running Clevis test logic."
-            Clevis_Client_Test
-            ;;
-        server)
-            rlLog "This machine's role is SERVER. Running Tang setup logic."
-            Tang_Server_Setup
-            ;;
-        *)
-            rlFail "Unknown TMT role for host $(hostname): '${TMT_GUEST[role]}'. Neither 'client' nor 'server'."
-            ;;
-    esac
+    if echo " $HOSTNAME $MY_IP " | grep -q " ${CLEVIS} "; then
+        rlLog "This machine is the CLIENT. Running Clevis test logic."
+        Clevis_Client_Test
+    elif echo " $HOSTNAME $MY_IP " | grep -q " ${TANG} "; then
+        rlLog "This machine is the SERVER. Running Tang setup logic."
+        Tang_Server_Setup
+    else
+        rlFail "Unknown role for host $(hostname). Neither client nor server."
+    fi
 rlJournalEnd
