@@ -79,7 +79,7 @@ function Clevis_Client_Test() {
         # === PRE-REBOOT: SETUP PHASE ===
         rlPhaseStartSetup "Clevis Client: Initial Setup"
             rlLog "Waiting for Tang server at ${TANG_IP} to be ready..."
-            rlRun "sync-block TANG_SETUP_DONE" "${TANG_IP}" "Waiting for Tang setup part"
+            rlRun "sync-block TANG_SETUP_DONE" "${TANG_IP}" 0 "Waiting for Tang setup part"
             rlLog "Tang server is ready. Proceeding with client setup."
 
             rlRun "mkdir -p /var/opt"
@@ -166,27 +166,8 @@ function Tang_Server_Setup() {
         rlRun "curl -sf http://localhost/adv" 0 "Verify Tang is responsive locally"
 
         rlLog "Tang server setup complete. Signaling to client."
-        rlRun "sync-set TANG_SETUP_DONE" "Setting that Tang setup part is done"
-
-        # <<< FIX: This is the "smart wait" logic.
-        # Instead of a fixed sleep, we will now poll the local sync status file
-        # until we see the "CLEVIS_TEST_DONE" flag set by the client.
-        # This keeps the test process alive without causing a deadlock.
-        rlLog "Server is now waiting for the client to signal it is finished..."
-        WAIT_TIMEOUT=900 # 15 minutes max wait
-        while [[ $WAIT_TIMEOUT -gt 0 ]]; do
-            # Check if the local status file contains the client's "done" signal
-            if grep -q "CLEVIS_TEST_DONE" "/var/tmp/sync-status"; then
-                rlLog "Client has signaled completion. Server can now exit."
-                break
-            fi
-            sleep 10
-            WAIT_TIMEOUT=$((WAIT_TIMEOUT - 10))
-        done
-
-        if [[ $WAIT_TIMEOUT -le 0 ]]; then
-            rlFail "Timed out waiting for the client to finish."
-        fi
+        rlRun "sync-set TANG_SETUP_DONE" 0 "Setting that Tang setup part is done"
+        rlRun "sync-block CLEVIS_TEST_DONE" 0 "Waiting for Clevis part is done"
     rlPhaseEnd
 }
 
