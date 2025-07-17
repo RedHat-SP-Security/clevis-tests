@@ -79,6 +79,8 @@ function Clevis_Client_Test() {
         # === PRE-REBOOT: SETUP PHASE ===
         rlPhaseStartSetup "Clevis Client: Initial Setup"
             rlLog "Waiting for Tang server at ${TANG_IP} to be ready..."
+            rlRun "ping -c 3 ${TANG_IP}" 0 "Ping Tang server to check network reachability"
+            rlRun "curl --retry 3 -sf http://${TANG_IP}/adv" 0 "Curl Tang server to check service is responsive"
             rlRun "sync-block TANG_SETUP_DONE ${TANG_IP}" 0 "Waiting for Tang setup part"
             rlLog "Tang server is ready. Proceeding with client setup."
 
@@ -162,10 +164,10 @@ function Tang_Server_Setup() {
         rlRun "jose jwk gen -i '{\"alg\":\"ECMR\"}' -o /var/db/tang/exc.jwk" 0 "Generate exchange key"
         rlRun "systemctl enable --now tangd.socket" 0 "Starting Tang service"
         rlRun "systemctl status tangd.socket" 0 "Checking Tang service status"
-        rlRun "curl -sf http://localhost/adv" 0 "Verify Tang is responsive locally"
+        rlRun "curl -sf http://${TANG_IP}/adv" 0 "Verify Tang is responsive locally"
 
         rlLog "Tang server setup complete. Signaling to client."
-        rlRun "sync-set TANG_SETUP_DONE " 0 "Setting that Tang setup part is done"
+        rlRun "sync-set TANG_SETUP_DONE" 0 "Setting that Tang setup part is done"
         rlRun "sync-block CLEVIS_TEST_DONE ${CLEVIS_IP}" 0 "Waiting for Clevis part is done"
     rlPhaseEnd
 }
@@ -177,28 +179,14 @@ rlJournalStart
         assign_roles
     rlPhaseEnd
 
-    # Role detection logic
-    # A case statement is slightly more robust for this
-    case "${TMT_GUEST[role]}" in
-        client)
-            rlLog "This machine's role is CLIENT. Running Clevis test logic."
-            Clevis_Client_Test
-            ;;
-        server)
-            rlLog "This machine's role is SERVER. Running Tang setup logic."
-            Tang_Server_Setup
-            ;;
-        *)
-            # Fallback for the `grep` method if role isn't set
-            if echo " $HOSTNAME $MY_IP " | grep -q " ${CLEVIS} "; then
-                rlLog "This machine is the CLIENT. Running Clevis test logic."
-                Clevis_Client_Test
-            elif echo " $HOSTNAME $MY_IP " | grep -q " ${TANG} "; then
-                rlLog "This machine is the SERVER. Running Tang setup logic."
-                Tang_Server_Setup
-            else
-                rlFail "Unknown role for host $(hostname). Neither client nor server."
-            fi
-            ;;
-    esac
+    if echo " $HOSTNAME $MY_IP " | grep -q " ${CLEVIS} "; then
+        rlLog "This machine is the CLIENT. Running Clevis test logic."
+        Clevis_Client_Test
+    elif echo " $HOSTNAME $MY_IP " | grep -q " ${TANG} "; then
+        rlLog "This machine is the SERVER. Running Tang setup logic."
+        Tang_Server_Setup
+    else
+        rlFail "Unknown role for host $(hostname). Neither client nor server."
+    fi
+
 rlJournalEnd
