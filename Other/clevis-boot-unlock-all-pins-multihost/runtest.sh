@@ -37,44 +37,46 @@ PERSISTENT_ADV_FILE="/var/opt/adv.jws"
 # Define the name for our unlocked device
 LUKS_DEV_NAME="myluksdev"
 
-
-# --- IP Assignment ---
-# This function resolves a hostname to an IP address.
 function get_IP() {
     if echo "$1" | grep -E -q '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+'; then
         echo "$1"
     else
+        # Use getent for robustness over 'host'
         getent hosts "$1" | awk '{ print $1 }' | head -n 1
     fi
 }
 
 # This function reads the tmt topology and gets IPs for all roles.
-function get_all_ips() {
+function assign_roles() {
     if [ -n "${TMT_TOPOLOGY_BASH}" ] && [ -f "${TMT_TOPOLOGY_BASH}" ]; then
-        rlLog "Sourcing IPs from ${TMT_TOPOLOGY_BASH}"
+        rlLog "Sourcing roles from ${TMT_TOPOLOGY_BASH}"
         . "${TMT_TOPOLOGY_BASH}"
-        
-        # Get the guest name assigned to the 'client' role
-        local client_guest_name=${TMT_ROLES["client"]}
-        # Use that guest name to look up its hostname
-        local clevis_hostname=${TMT_GUESTS[$client_guest_name]['hostname']}
-        # Get the IP from the hostname
-        export CLEVIS_IP=$(get_IP "$clevis_hostname")
 
-        # Repeat for the server
-        local server_guest_name=${TMT_ROLES["server"]}
-        local tang_hostname=${TMT_GUESTS[$server_guest_name]['hostname']}
-        export TANG_IP=$(get_IP "$tang_hostname")
-        
-        rlAssertNotEmpty "Could not resolve client IP" "$CLEVIS_IP"
-        rlAssertNotEmpty "Could not resolve server IP" "$TANG_IP"
-        
-        rlLog "IPs discovered: Client=${CLEVIS_IP}, Server=${TANG_IP}"
-    else
-        rlDie "FATAL: Could not find TMT topology information. This test must be run in a multihost environment."
+        # This is the corrected logic based on the keylime example.
+        # TMT_GUESTS keys are "guest_name.property".
+        # In our plan, the guest with role "client" is named "client".
+        export CLEVIS=${TMT_GUESTS["client.hostname"]}
+        export TANG=${TMT_GUESTS["server.hostname"]}
+        MY_IP="${TMT_GUEST['hostname']}"
+
+    elif [ -n "$SERVERS" ]; then
+        # Fallback for other environments
+        export CLEVIS=$( echo "$SERVERS $CLIENTS" | awk '{ print $1 }')
+        export TANG=$( echo "$SERVERS $CLIENTS" | awk '{ print $2 }')
     fi
-}
 
+    [ -z "$MY_IP" ] && MY_IP=$( hostname -I | awk '{ print $1 }' )
+    [ -n "$CLEVIS" ] && export CLEVIS_IP=$( get_IP "$CLEVIS" )
+    [ -n "$TANG" ] && export TANG_IP=$( get_IP "$TANG" )
+
+    rlAssertNotEmpty "Could not resolve client IP" "$CLEVIS_IP"
+    rlAssertNotEmpty "Could not resolve server IP" "$TANG_IP"
+
+    rlLog "ROLE ASSIGNMENT:"
+    rlLog "Client Host: ${CLEVIS} (${CLEVIS_IP})"
+    rlLog "Server Host: ${TANG} (${TANG_IP})"
+    rlLog "My Host/IP: $(hostname) / ${MY_IP}"
+}
 
 # --- Clevis Client Logic ---
 # This function contains all steps that run on the Clevis client machine.
@@ -129,7 +131,7 @@ EOF_HOOK
 install_items+=" /var/opt/90-luks-loop-hook.sh /usr/lib/dracut/hooks/pre-udev/90-luks-loop-hook.sh "
 install_items+=" ${PERSISTENT_LOOPFILE} "
 add_dracutmodules+=" network clevis "
-kernel_cmdline="rd.neednet=1"
+kernel_cmdline="rd.neednet=1 rd.info rd.debug"
 EOF_CONF
 
             rlRun "dracut --force" 0 "Regenerate initramfs with new hook"
@@ -140,9 +142,24 @@ EOF_CONF
     else
         # === POST-REBOOT: VERIFICATION PHASE ===
         rlPhaseStartTest "Clevis Client: Verify Auto-Unlock"
+            # This is the primary verification. If the device is unlocked, the boot-time process worked.
             rlRun "cryptsetup status ${LUKS_DEV_NAME}" 0 "Verify '${LUKS_DEV_NAME}' is active and unlocked"
-            rlRun "journalctl -b | grep 'Finished Cryptography Setup for ${LUKS_DEV_NAME}'" 0 "Verify journal for successful cryptsetup"
-            rlLogPass "Test passed: Clevis successfully unlocked the device during boot."
+
+            # --- EXPLICIT BOOT-TIME VERIFICATION ---
+            # Search the system's boot journal for messages that ONLY appear
+            # when Clevis runs inside the initramfs to unlock the device.
+            rlLog "Searching boot journal for explicit Clevis unlock messages..."
+            
+            # Check for the clevis-luks-askpass service, which is a key part of the initramfs unlock process.
+            rlRun "journalctl -b | grep 'clevis-luks-askpass.service: Deactivated successfully.'" 0 "Verify clevis-luks-askpass service ran during boot"
+            
+            # Check for the final success message from systemd-cryptsetup for our specific device.
+            rlRun "journalctl -b | grep 'Finished Cryptography Setup for ${LUKS_DEV_NAME}'" 0 "Verify journal for successful cryptsetup of our device"
+            
+            # Check for the dracut hook message to prove our custom script ran.
+            rlRun "journalctl -b | grep 'LUKS Loop Hook: losetup complete.'" 0 "Verify our custom dracut hook ran during boot"
+
+            rlLogPass "Test passed: Clevis successfully unlocked the device during boot, and boot-time logs confirm it."
             rlRun "sync-set CLEVIS_TEST_DONE"
         rlPhaseEnd
 
@@ -190,14 +207,14 @@ rlJournalStart
         get_all_ips
     rlPhaseEnd
 
-    # Use the TMT_GUEST_ROLE variable for clear and robust role detection
-    if [ "$TMT_GUEST_ROLE" == "client" ]; then
+    # Role detection logic from keylime example
+    if echo " $HOSTNAME $MY_IP " | grep -q " ${CLEVIS} "; then
         rlLog "This machine is the CLIENT. Running Clevis test logic."
         Clevis_Client_Test
-    elif [ "$TMT_GUEST_ROLE" == "server" ]; then
+    elif echo " $HOSTNAME $MY_IP " | grep -q " ${TANG} "; then
         rlLog "This machine is the SERVER. Running Tang setup logic."
         Tang_Server_Setup
     else
-        rlFail "Unknown role: '$TMT_GUEST_ROLE' for host $(hostname)."
+        rlFail "Unknown role for host $(hostname). Neither client nor server."
     fi
 rlJournalEnd
