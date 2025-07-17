@@ -79,7 +79,7 @@ function Clevis_Client_Test() {
         # === PRE-REBOOT: SETUP PHASE ===
         rlPhaseStartSetup "Clevis Client: Initial Setup"
             rlLog "Waiting for Tang server at ${TANG_IP} to be ready..."
-            rlRun "sync-block TANG_SETUP_DONE" "${TANG_IP}" 0 "Waiting for Tang setup part"
+            rlRun "sync-block TANG_SETUP_DONE" 0 "Waiting for Tang setup part"
             rlLog "Tang server is ready. Proceeding with client setup."
 
             rlRun "mkdir -p /var/opt"
@@ -156,7 +156,6 @@ EOF_DRACUT_CONF
 # --- Tang Server Logic ---
 function Tang_Server_Setup() {
     rlPhaseStartSetup "Tang Server: Setup"
-        rlRun "dnf install -y tang jose-util" 0 "Install server packages"
         rlRun "setenforce 0" 0 "Putting SELinux in Permissive mode for simplicity"
         rlRun "mkdir -p /var/db/tang" 0 "Ensure tang directory exists"
         rlRun "jose jwk gen -i '{\"alg\":\"ES512\"}' -o /var/db/tang/sig.jwk" 0 "Generate signature key"
