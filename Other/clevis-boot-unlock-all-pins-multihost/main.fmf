@@ -10,5 +10,5 @@ require+:
   - cryptsetup
   - tang
   - curl
-  - library(rsyslog/basic)
+  - library(sync)
 duration: 5m
