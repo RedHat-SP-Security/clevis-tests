@@ -157,8 +157,6 @@ function Tang_Server_Setup() {
     rlPhaseStartSetup "Tang Server: Setup"
         rlRun "setenforce 0" 0 "Putting SELinux in Permissive mode for simplicity"
         
-        # <<< THE FIX: Ensure firewalld is running and configured.
-        rlRun "dnf install -y firewalld" 0 "Install firewalld package"
         rlRun "systemctl enable --now firewalld" 0 "Start and enable firewalld service"
         rlRun "firewall-cmd --add-port=${SYNC_GET_PORT}/tcp --permanent" 0 "Permanently open sync-get port"
         rlRun "firewall-cmd --add-port=${SYNC_SET_PORT}/tcp --permanent" 0 "Permanently open sync-set port"
