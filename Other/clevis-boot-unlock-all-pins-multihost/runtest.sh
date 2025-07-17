@@ -69,8 +69,13 @@ function assign_roles() {
     [ -n "$CLEVIS" ] && export CLEVIS_IP=$( get_IP "$CLEVIS" )
     [ -n "$TANG" ] && export TANG_IP=$( get_IP "$TANG" )
 
-    rlAssertNotEmpty "Could not resolve client IP" "$CLEVIS_IP"
-    rlAssertNotEmpty "Could not resolve server IP" "$TANG_IP"
+    # Use standard shell checks instead of the non-standard rlAssertNotEmpty
+    if [ -z "$CLEVIS_IP" ]; then
+        rlFail "Could not resolve client IP"
+    fi
+    if [ -z "$TANG_IP" ]; then
+        rlFail "Could not resolve server IP"
+    fi
 
     rlLog "ROLE ASSIGNMENT:"
     rlLog "Client Host: ${CLEVIS} (${CLEVIS_IP})"
@@ -78,8 +83,8 @@ function assign_roles() {
     rlLog "My Host/IP: $(hostname) / ${MY_IP}"
 }
 
+
 # --- Clevis Client Logic ---
-# This function contains all steps that run on the Clevis client machine.
 function Clevis_Client_Test() {
     if [ ! -f "$COOKIE" ]; then
         # === PRE-REBOOT: SETUP PHASE ===
@@ -112,7 +117,7 @@ function Clevis_Client_Test() {
             fi
 
             rlLogInfo "Binding Clevis with SSS config: ${SSS_CONFIG}"
-            rlRun "clevis luks bind -d ${LOOP_DEV} sss '${SSS_CONFIG}' <<< 'password'" 0 "Bind Clevis to LUKS device"
+            rlRun "clevis luks bind -f -d ${LOOP_DEV} sss '${SSS_CONFIG}' <<< 'password'" 0 "Bind Clevis to LUKS device"
 
             rlLogInfo "Adding entry to /etc/crypttab for automatic unlock."
             rlRun "echo '${LUKS_DEV_NAME} UUID=${LUKS_UUID} none luks,clevis,nofail' >> /etc/crypttab"
@@ -142,23 +147,11 @@ EOF_CONF
     else
         # === POST-REBOOT: VERIFICATION PHASE ===
         rlPhaseStartTest "Clevis Client: Verify Auto-Unlock"
-            # This is the primary verification. If the device is unlocked, the boot-time process worked.
             rlRun "cryptsetup status ${LUKS_DEV_NAME}" 0 "Verify '${LUKS_DEV_NAME}' is active and unlocked"
-
-            # --- EXPLICIT BOOT-TIME VERIFICATION ---
-            # Search the system's boot journal for messages that ONLY appear
-            # when Clevis runs inside the initramfs to unlock the device.
             rlLog "Searching boot journal for explicit Clevis unlock messages..."
-            
-            # Check for the clevis-luks-askpass service, which is a key part of the initramfs unlock process.
             rlRun "journalctl -b | grep 'clevis-luks-askpass.service: Deactivated successfully.'" 0 "Verify clevis-luks-askpass service ran during boot"
-            
-            # Check for the final success message from systemd-cryptsetup for our specific device.
             rlRun "journalctl -b | grep 'Finished Cryptography Setup for ${LUKS_DEV_NAME}'" 0 "Verify journal for successful cryptsetup of our device"
-            
-            # Check for the dracut hook message to prove our custom script ran.
             rlRun "journalctl -b | grep 'LUKS Loop Hook: losetup complete.'" 0 "Verify our custom dracut hook ran during boot"
-
             rlLogPass "Test passed: Clevis successfully unlocked the device during boot, and boot-time logs confirm it."
             rlRun "sync-set CLEVIS_TEST_DONE"
         rlPhaseEnd
@@ -204,6 +197,8 @@ function Tang_Server_Setup() {
 # --- Main Execution Logic ---
 rlJournalStart
     rlPhaseStartSetup "Global Setup"
+        # Import the sync library to get sync-block and sync-set commands
+        rlRun 'rlImport "sync"' || rlDie "Cannot import sync library"
         assign_roles
     rlPhaseEnd
 

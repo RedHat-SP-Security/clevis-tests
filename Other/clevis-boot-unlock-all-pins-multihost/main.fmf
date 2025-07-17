@@ -4,7 +4,7 @@ description: |
 
 contact: Adam Prikryl <aprikryl@redhat.com>
 test: ./runtest.sh
-required:
+require+:
   - clevis
   - clevis-luks
   - cryptsetup
