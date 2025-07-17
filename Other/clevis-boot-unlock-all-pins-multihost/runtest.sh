@@ -201,7 +201,6 @@ function Tang_Server_Setup() {
 # --- Main Execution Logic ---
 rlJournalStart
     rlPhaseStartSetup "Global Setup"
-        rlRun 'rlImport "sync"' || rlDie "Cannot import sync library"
         assign_roles
     rlPhaseEnd
 
