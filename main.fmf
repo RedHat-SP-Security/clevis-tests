@@ -2,3 +2,8 @@ component:
   - clevis
 contact: Patrik Koncity <pkoncity@redhat.com>
 framework: beakerlib
+
+require:
+  - url: https://github.com/RedHat-SP-Security/keylime-tests.git
+    name: /Library/sync
+    type: library
