@@ -10,5 +10,8 @@ require+:
   - cryptsetup
   - tang
   - curl
-  - library(sync)
+
 duration: 5m
+
+link+:
+  - library(sync)
