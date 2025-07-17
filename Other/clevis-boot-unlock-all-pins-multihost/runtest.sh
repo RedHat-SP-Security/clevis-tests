@@ -32,6 +32,7 @@
 COOKIE="/var/opt/clevis_setup_done"
 PERSISTENT_LOOPFILE="/var/opt/loopfile"
 LUKS_DEV_NAME="myluksdev"
+SYNC_PORT=2134 
 
 # --- IP Assignment ---
 # This function resolves a hostname to an IP address.
@@ -80,6 +81,7 @@ function Clevis_Client_Test() {
         rlPhaseStartSetup "Clevis Client: Initial Setup"
             # 1. WAIT: Wait for the server's "ready" signal.
             rlLog "Waiting for Tang server at ${TANG_IP} to be ready..."
+            rlRun "curl -sf http://${TANG_IP}/adv" 0 "Verify Tang is responsive locally"
             rlRun "sync-block TANG_SETUP_DONE ${TANG_IP}" 0 "Waiting for Tang setup part"
             
             # 2. WORK: Once unblocked, perform the entire test lifecycle.
@@ -155,8 +157,8 @@ EOF_DRACUT_CONF
 # --- Tang Server Logic ---
 function Tang_Server_Setup() {
     rlPhaseStartSetup "Tang Server: Setup"
-        # 1. SETUP & SIGNAL: Set up the service and signal that it's ready.
         rlRun "setenforce 0" 0 "Putting SELinux in Permissive mode for simplicity"
+        rlRun "firewall-cmd --add-port=${SYNC_PORT}/tcp" 0 "Open sync library port"
         rlRun "mkdir -p /var/db/tang" 0 "Ensure tang directory exists"
         rlRun "jose jwk gen -i '{\"alg\":\"ES512\"}' -o /var/db/tang/sig.jwk" 0 "Generate signature key"
         rlRun "jose jwk gen -i '{\"alg\":\"ECMR\"}' -o /var/db/tang/exc.jwk" 0 "Generate exchange key"
