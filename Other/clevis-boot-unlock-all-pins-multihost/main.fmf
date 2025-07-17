@@ -10,5 +10,4 @@ require+:
   - cryptsetup
   - tang
   - curl
-
 duration: 5m
