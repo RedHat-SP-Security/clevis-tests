@@ -29,12 +29,11 @@
 . /usr/share/beakerlib/beakerlib.sh || exit 1
 
 # --- Configuration ---
-# --- Configuration ---
 COOKIE="/var/opt/clevis_setup_done"
 PERSISTENT_LOOPFILE="/var/opt/loopfile"
 LUKS_DEV_NAME="myluksdev"
-SYNC_GET_PORT=2134  # Port for sync-block to get status
-SYNC_SET_PORT=2135  # Port for remote sync-set to send status
+SYNC_GET_PORT=2134
+SYNC_SET_PORT=2135
 
 # --- IP Assignment ---
 function get_IP() {
@@ -156,7 +155,6 @@ EOF_DRACUT_CONF
 function Tang_Server_Setup() {
     rlPhaseStartSetup "Tang Server: Setup"
         rlRun "setenforce 0" 0 "Putting SELinux in Permissive mode for simplicity"
-        
         rlRun "systemctl enable --now firewalld" 0 "Start and enable firewalld service"
         rlRun "firewall-cmd --add-port=${SYNC_GET_PORT}/tcp --permanent" 0 "Permanently open sync-get port"
         rlRun "firewall-cmd --add-port=${SYNC_SET_PORT}/tcp --permanent" 0 "Permanently open sync-set port"
@@ -175,7 +173,6 @@ function Tang_Server_Setup() {
 
         rlRun "ncat -l -k -p ${SYNC_SET_PORT} >> /var/tmp/sync-status &" 0 "Start sync update listener"
         
-        # Use the deadlock-free "smart wait" loop.
         rlLog "Server is now waiting for the client to signal it is finished..."
         WAIT_TIMEOUT=900
         while [[ $WAIT_TIMEOUT -gt 0 ]]; do
