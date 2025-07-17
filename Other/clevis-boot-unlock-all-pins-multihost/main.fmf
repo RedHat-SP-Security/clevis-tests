@@ -12,6 +12,3 @@ require+:
   - curl
 
 duration: 5m
-
-link+:
-  - library(sync)
