@@ -156,9 +156,9 @@ EOF_DRACUT_CONF
 # --- Tang Server Logic ---
 function Tang_Server_Setup() {
     rlPhaseStartSetup "Tang Server: Setup"
+        rlRun "dnf install -y tang jose-util" 0 "Install server packages"
         rlRun "setenforce 0" 0 "Putting SELinux in Permissive mode for simplicity"
         rlRun "mkdir -p /var/db/tang" 0 "Ensure tang directory exists"
-        # <<< FIX: Overwrite existing keys for a clean run
         rlRun "jose jwk gen -i '{\"alg\":\"ES512\"}' -o /var/db/tang/sig.jwk" 0 "Generate signature key"
         rlRun "jose jwk gen -i '{\"alg\":\"ECMR\"}' -o /var/db/tang/exc.jwk" 0 "Generate exchange key"
         rlRun "systemctl enable --now tangd.socket" 0 "Starting Tang service"
@@ -168,8 +168,25 @@ function Tang_Server_Setup() {
         rlLog "Tang server setup complete. Signaling to client."
         sync-set "TANG_SETUP_DONE"
 
-        # <<< FIX: REMOVED THE DEADLOCK. The server's job is done. It does not need to wait for the client.
-        rlLog "Tang server setup is complete. The test will now conclude on the client."
+        # <<< FIX: This is the "smart wait" logic.
+        # Instead of a fixed sleep, we will now poll the local sync status file
+        # until we see the "CLEVIS_TEST_DONE" flag set by the client.
+        # This keeps the test process alive without causing a deadlock.
+        rlLog "Server is now waiting for the client to signal it is finished..."
+        WAIT_TIMEOUT=900 # 15 minutes max wait
+        while [[ $WAIT_TIMEOUT -gt 0 ]]; do
+            # Check if the local status file contains the client's "done" signal
+            if grep -q "CLEVIS_TEST_DONE" "/var/tmp/sync-status"; then
+                rlLog "Client has signaled completion. Server can now exit."
+                break
+            fi
+            sleep 10
+            WAIT_TIMEOUT=$((WAIT_TIMEOUT - 10))
+        done
+
+        if [[ $WAIT_TIMEOUT -le 0 ]]; then
+            rlFail "Timed out waiting for the client to finish."
+        fi
     rlPhaseEnd
 }
 
