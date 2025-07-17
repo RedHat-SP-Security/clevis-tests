@@ -79,7 +79,7 @@ function Clevis_Client_Test() {
         # === PRE-REBOOT: SETUP PHASE ===
         rlPhaseStartSetup "Clevis Client: Initial Setup"
             rlLog "Waiting for Tang server at ${TANG_IP} to be ready..."
-            rlRun "sync-block TANG_SETUP_DONE" 0 "Waiting for Tang setup part"
+            rlRun "sync-block TANG_SETUP_DONE ${TANG_IP}" 0 "Waiting for Tang setup part"
             rlLog "Tang server is ready. Proceeding with client setup."
 
             rlRun "mkdir -p /var/opt"
@@ -165,8 +165,8 @@ function Tang_Server_Setup() {
         rlRun "curl -sf http://localhost/adv" 0 "Verify Tang is responsive locally"
 
         rlLog "Tang server setup complete. Signaling to client."
-        rlRun "sync-set TANG_SETUP_DONE" 0 "Setting that Tang setup part is done"
-        rlRun "sync-block CLEVIS_TEST_DONE" 0 "Waiting for Clevis part is done"
+        rlRun "sync-set TANG_SETUP_DONE " 0 "Setting that Tang setup part is done"
+        rlRun "sync-block CLEVIS_TEST_DONE ${CLEVIS_IP}" 0 "Waiting for Clevis part is done"
     rlPhaseEnd
 }
 
