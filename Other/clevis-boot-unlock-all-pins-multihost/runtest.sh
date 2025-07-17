@@ -182,7 +182,7 @@ rlJournalStart
 
     # Role detection logic
     # A case statement is slightly more robust for this
-    case "${TMT_GUEST['role']}" in
+    case "${TMT_GUEST[role]}" in
         client)
             rlLog "This machine's role is CLIENT. Running Clevis test logic."
             Clevis_Client_Test
