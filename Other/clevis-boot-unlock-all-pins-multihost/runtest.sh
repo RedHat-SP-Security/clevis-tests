@@ -78,15 +78,15 @@ function Clevis_Client_Test() {
     if [ ! -f "$COOKIE" ]; then
         # === PRE-REBOOT: SETUP PHASE ===
         rlPhaseStartSetup "Clevis Client: Initial Setup"
+            # 1. WAIT: Wait for the server's "ready" signal.
             rlLog "Waiting for Tang server at ${TANG_IP} to be ready..."
-            rlRun "ping -c 3 ${TANG_IP}" 0 "Ping Tang server to check network reachability"
-            rlRun "curl --retry 3 -sf http://${TANG_IP}/adv" 0 "Curl Tang server to check service is responsive"
             rlRun "sync-block TANG_SETUP_DONE ${TANG_IP}" 0 "Waiting for Tang setup part"
+            
+            # 2. WORK: Once unblocked, perform the entire test lifecycle.
             rlLog "Tang server is ready. Proceeding with client setup."
-
             rlRun "mkdir -p /var/opt"
             rlRun "dd if=/dev/zero of=${PERSISTENT_LOOPFILE} bs=1M count=100" 0 "Create 100MB loopfile"
-            LOOP_DEV=$(losetup -f --show ${PERSISTENT_LOOPFILE})
+            LOOP_DEV=$(losetup -f --show "${PERSISTENT_LOOPFILE}")
             rlAssertNotEquals "Loop device should be created" "" "$LOOP_DEV"
             rlLogInfo "Using loop device ${LOOP_DEV} for LUKS."
 
@@ -95,7 +95,6 @@ function Clevis_Client_Test() {
             rlAssertNotEquals "LUKS UUID should not be empty" "" "${LUKS_UUID}"
 
             rlLogInfo "Downloading Tang advertisement from http://${TANG_IP}/adv"
-            # <<< FIX: Added retries to curl for network resilience
             rlRun "curl --retry 5 --retry-delay 2 -sfgo /var/opt/adv.jws http://${TANG_IP}/adv" 0 "Download Tang advertisement"
 
             local SSS_CONFIG
@@ -111,11 +110,8 @@ function Clevis_Client_Test() {
             rlRun "clevis luks bind -f -d ${LOOP_DEV} sss '${SSS_CONFIG}' <<< 'password'" 0 "Bind Clevis to LUKS device"
 
             rlLogInfo "Adding entry to /etc/crypttab for automatic unlock."
-            # <<< FIX: Use a unique separator to prevent duplicating the line
             grep -q "UUID=${LUKS_UUID}" /etc/crypttab || echo "${LUKS_DEV_NAME} UUID=${LUKS_UUID} none luks,clevis,nofail" >> /etc/crypttab
 
-            rlLogInfo "Creating dracut hook to set up loop device during boot."
-            # <<< FIX: Correct hook directory path in install_items
             cat << EOF_DRACUT_CONF > "/etc/dracut.conf.d/99-loopluks.conf"
 install_items+=" ${PERSISTENT_LOOPFILE} "
 add_dracutmodules+=" network clevis "
@@ -137,7 +133,8 @@ EOF_DRACUT_CONF
             rlRun "journalctl -b | grep 'clevis-luks-askpass.service: Deactivated successfully.'" 0 "Verify clevis-luks-askpass service ran during boot"
             rlRun "journalctl -b | grep 'Finished Cryptography Setup for ${LUKS_DEV_NAME}'" 0 "Verify journal for successful cryptsetup of our device"
             rlLogPass "Test passed: Clevis successfully unlocked the device during boot."
-            # <<< FIX: Signal that the client is done.
+            
+            # 3. SIGNAL: After passing the test, send the final "done" signal to unblock the server.
             rlRun "sync-set CLEVIS_TEST_DONE" 0 "Setting that Clevis part is done"
         rlPhaseEnd
 
@@ -158,6 +155,7 @@ EOF_DRACUT_CONF
 # --- Tang Server Logic ---
 function Tang_Server_Setup() {
     rlPhaseStartSetup "Tang Server: Setup"
+        # 1. SETUP & SIGNAL: Set up the service and signal that it's ready.
         rlRun "setenforce 0" 0 "Putting SELinux in Permissive mode for simplicity"
         rlRun "mkdir -p /var/db/tang" 0 "Ensure tang directory exists"
         rlRun "jose jwk gen -i '{\"alg\":\"ES512\"}' -o /var/db/tang/sig.jwk" 0 "Generate signature key"
@@ -167,7 +165,23 @@ function Tang_Server_Setup() {
         rlRun "curl -sf http://${TANG_IP}/adv" 0 "Verify Tang is responsive locally"
 
         rlLog "Tang server setup complete. Signaling to client."
-        rlRun "sync-set TANG_SETUP_DONE ${CLEVIS_IP}" 0 "Setting that Tang setup part is done"
+        rlRun "sync-set TANG_SETUP_DONE" 0 "Setting that Tang setup part is done"
+
+        # 2. WAIT: Now, enter a deadlock-free wait for the client's final "done" signal.
+        rlLog "Server is now waiting for the client to signal it is finished..."
+        WAIT_TIMEOUT=900 # 15 minutes max wait
+        while [[ $WAIT_TIMEOUT -gt 0 ]]; do
+            if grep -q "CLEVIS_TEST_DONE" "/var/tmp/sync-status"; then
+                rlLog "Client has signaled completion. Server can now exit."
+                break
+            fi
+            sleep 10
+            WAIT_TIMEOUT=$((WAIT_TIMEOUT - 10))
+        done
+
+        if [[ $WAIT_TIMEOUT -le 0 ]]; then
+            rlFail "Timed out waiting for the client to finish."
+        fi
     rlPhaseEnd
 }
 
