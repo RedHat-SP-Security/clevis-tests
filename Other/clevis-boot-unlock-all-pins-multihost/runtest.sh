@@ -167,7 +167,7 @@ function Tang_Server_Setup() {
         rlRun "curl -sf http://${TANG_IP}/adv" 0 "Verify Tang is responsive locally"
 
         rlLog "Tang server setup complete. Signaling to client."
-        rlRun "sync-set TANG_SETUP_DONE" 0 "Setting that Tang setup part is done"
+        rlRun "sync-set TANG_SETUP_DONE ${CLEVIS_IP}" 0 "Setting that Tang setup part is done"
         rlRun "sync-block CLEVIS_TEST_DONE ${CLEVIS_IP}" 0 "Waiting for Clevis part is done"
     rlPhaseEnd
 }
