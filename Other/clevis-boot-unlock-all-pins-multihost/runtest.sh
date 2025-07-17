@@ -32,10 +32,8 @@
 COOKIE="/var/opt/clevis_setup_done"
 PERSISTENT_LOOPFILE="/var/opt/loopfile"
 LUKS_DEV_NAME="myluksdev"
-SYNC_PORT=2134 
 
 # --- IP Assignment ---
-# This function resolves a hostname to an IP address.
 function get_IP() {
     if echo "$1" | grep -E -q '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+'; then
         echo "$1"
@@ -44,15 +42,15 @@ function get_IP() {
     fi
 }
 
-# This function reads the tmt topology and gets IPs for all roles.
 function assign_roles() {
     if [ -n "${TMT_TOPOLOGY_BASH}" ] && [ -f "${TMT_TOPOLOGY_BASH}" ]; then
         rlLog "Sourcing roles from ${TMT_TOPOLOGY_BASH}"
+        # shellcheck source=/dev/null
         . "${TMT_TOPOLOGY_BASH}"
 
         export CLEVIS=${TMT_GUESTS["client.hostname"]}
         export TANG=${TMT_GUESTS["server.hostname"]}
-        MY_IP="${TMT_GUEST['hostname']}"
+        export MY_IP="${TMT_GUEST[hostname]}"
 
     elif [ -n "$SERVERS" ]; then
         export CLEVIS=$( echo "$SERVERS $CLIENTS" | awk '{ print $1 }')
@@ -79,12 +77,11 @@ function Clevis_Client_Test() {
     if [ ! -f "$COOKIE" ]; then
         # === PRE-REBOOT: SETUP PHASE ===
         rlPhaseStartSetup "Clevis Client: Initial Setup"
-            # 1. WAIT: Wait for the server's "ready" signal.
+            # 1. WAIT for the server to be ready.
             rlLog "Waiting for Tang server at ${TANG_IP} to be ready..."
-            rlRun "curl -sf http://${TANG_IP}/adv" 0 "Verify Tang is responsive locally"
             rlRun "sync-block TANG_SETUP_DONE ${TANG_IP}" 0 "Waiting for Tang setup part"
             
-            # 2. WORK: Once unblocked, perform the entire test lifecycle.
+            # 2. WORK once unblocked.
             rlLog "Tang server is ready. Proceeding with client setup."
             rlRun "mkdir -p /var/opt"
             rlRun "dd if=/dev/zero of=${PERSISTENT_LOOPFILE} bs=1M count=100" 0 "Create 100MB loopfile"
@@ -136,7 +133,7 @@ EOF_DRACUT_CONF
             rlRun "journalctl -b | grep 'Finished Cryptography Setup for ${LUKS_DEV_NAME}'" 0 "Verify journal for successful cryptsetup of our device"
             rlLogPass "Test passed: Clevis successfully unlocked the device during boot."
             
-            # 3. SIGNAL: After passing the test, send the final "done" signal to unblock the server.
+            # 3. SIGNAL that the test is complete.
             rlRun "sync-set CLEVIS_TEST_DONE" 0 "Setting that Clevis part is done"
         rlPhaseEnd
 
@@ -157,8 +154,8 @@ EOF_DRACUT_CONF
 # --- Tang Server Logic ---
 function Tang_Server_Setup() {
     rlPhaseStartSetup "Tang Server: Setup"
+        # 1. SETUP & SIGNAL: Set up the service and signal that it's ready.
         rlRun "setenforce 0" 0 "Putting SELinux in Permissive mode for simplicity"
-        rlRun "firewall-cmd --add-port=${SYNC_PORT}/tcp" 0 "Open sync library port"
         rlRun "mkdir -p /var/db/tang" 0 "Ensure tang directory exists"
         rlRun "jose jwk gen -i '{\"alg\":\"ES512\"}' -o /var/db/tang/sig.jwk" 0 "Generate signature key"
         rlRun "jose jwk gen -i '{\"alg\":\"ECMR\"}' -o /var/db/tang/exc.jwk" 0 "Generate exchange key"
@@ -194,14 +191,17 @@ rlJournalStart
         assign_roles
     rlPhaseEnd
 
-    if echo " $HOSTNAME $MY_IP " | grep -q " ${CLEVIS} "; then
-        rlLog "This machine is the CLIENT. Running Clevis test logic."
-        Clevis_Client_Test
-    elif echo " $HOSTNAME $MY_IP " | grep -q " ${TANG} "; then
-        rlLog "This machine is the SERVER. Running Tang setup logic."
-        Tang_Server_Setup
-    else
-        rlFail "Unknown role for host $(hostname). Neither client nor server."
-    fi
-
+    case "${TMT_GUEST[role]}" in
+        client)
+            rlLog "This machine's role is CLIENT. Running Clevis test logic."
+            Clevis_Client_Test
+            ;;
+        server)
+            rlLog "This machine's role is SERVER. Running Tang setup logic."
+            Tang_Server_Setup
+            ;;
+        *)
+            rlFail "Unknown TMT role for host $(hostname): '${TMT_GUEST[role]}'. Neither 'client' nor 'server'."
+            ;;
+    esac
 rlJournalEnd
