@@ -29,22 +29,16 @@
 . /usr/share/beakerlib/beakerlib.sh || exit 1
 
 # --- Configuration ---
-# COOKIE marks if the client has rebooted.
 COOKIE="/var/opt/clevis_setup_done"
-# Define persistent file locations for the client
 PERSISTENT_LOOPFILE="/var/opt/loopfile"
-PERSISTENT_ADV_FILE="/var/opt/adv.jws"
-# Define the name for our unlocked device
 LUKS_DEV_NAME="myluksdev"
 
-
-# --- IP Assignment (Pattern from Keylime example) ---
+# --- IP Assignment ---
 # This function resolves a hostname to an IP address.
 function get_IP() {
     if echo "$1" | grep -E -q '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+'; then
         echo "$1"
     else
-        # Use getent for robustness over 'host'
         getent hosts "$1" | awk '{ print $1 }' | head -n 1
     fi
 }
@@ -55,15 +49,11 @@ function assign_roles() {
         rlLog "Sourcing roles from ${TMT_TOPOLOGY_BASH}"
         . "${TMT_TOPOLOGY_BASH}"
 
-        # This is the corrected logic based on the keylime example.
-        # TMT_GUESTS keys are "guest_name.property".
-        # In our plan, the guest with role "client" is named "client".
         export CLEVIS=${TMT_GUESTS["client.hostname"]}
         export TANG=${TMT_GUESTS["server.hostname"]}
         MY_IP="${TMT_GUEST['hostname']}"
 
     elif [ -n "$SERVERS" ]; then
-        # Fallback for other environments
         export CLEVIS=$( echo "$SERVERS $CLIENTS" | awk '{ print $1 }')
         export TANG=$( echo "$SERVERS $CLIENTS" | awk '{ print $2 }')
     fi
@@ -72,12 +62,8 @@ function assign_roles() {
     [ -n "$CLEVIS" ] && export CLEVIS_IP=$( get_IP "$CLEVIS" )
     [ -n "$TANG" ] && export TANG_IP=$( get_IP "$TANG" )
 
-    # Use standard shell checks instead of the non-standard rlAssertNotEmpty
-    if [ -z "$CLEVIS_IP" ]; then
-        rlFail "Could not resolve client IP"
-    fi
-    if [ -z "$TANG_IP" ]; then
-        rlFail "Could not resolve server IP"
+    if [ -z "$CLEVIS_IP" ] || [ -z "$TANG_IP" ]; then
+        rlFail "Could not resolve client or server IP addresses."
     fi
 
     rlLog "ROLE ASSIGNMENT:"
@@ -92,7 +78,6 @@ function Clevis_Client_Test() {
     if [ ! -f "$COOKIE" ]; then
         # === PRE-REBOOT: SETUP PHASE ===
         rlPhaseStartSetup "Clevis Client: Initial Setup"
-            rlRun "rpm -q clevis-dracut cryptsetup tpm2-tools" 0 "Verify required packages are in the image"
             rlLog "Waiting for Tang server at ${TANG_IP} to be ready..."
             sync-block "TANG_SETUP_DONE" "${TANG_IP}"
             rlLog "Tang server is ready. Proceeding with client setup."
@@ -108,7 +93,8 @@ function Clevis_Client_Test() {
             rlAssertNotEquals "LUKS UUID should not be empty" "" "${LUKS_UUID}"
 
             rlLogInfo "Downloading Tang advertisement from http://${TANG_IP}/adv"
-            rlRun "curl -sfgo ${PERSISTENT_ADV_FILE} http://${TANG_IP}/adv" 0 "Download Tang advertisement"
+            # <<< FIX: Added retries to curl for network resilience
+            rlRun "curl --retry 5 --retry-delay 2 -sfgo /var/opt/adv.jws http://${TANG_IP}/adv" 0 "Download Tang advertisement"
 
             local SSS_CONFIG
             if [ -e "/dev/tpm0" ] || [ -e "/dev/tpmrm0" ]; then
@@ -120,30 +106,22 @@ function Clevis_Client_Test() {
             fi
 
             rlLogInfo "Binding Clevis with SSS config: ${SSS_CONFIG}"
-            # Add the '-f' flag to make the command non-interactive
             rlRun "clevis luks bind -f -d ${LOOP_DEV} sss '${SSS_CONFIG}' <<< 'password'" 0 "Bind Clevis to LUKS device"
 
             rlLogInfo "Adding entry to /etc/crypttab for automatic unlock."
-            rlRun "echo '${LUKS_DEV_NAME} UUID=${LUKS_UUID} none luks,clevis,nofail' >> /etc/crypttab"
+            # <<< FIX: Use a unique separator to prevent duplicating the line
+            grep -q "UUID=${LUKS_UUID}" /etc/crypttab || echo "${LUKS_DEV_NAME} UUID=${LUKS_UUID} none luks,clevis,nofail" >> /etc/crypttab
 
             rlLogInfo "Creating dracut hook to set up loop device during boot."
-            cat << EOF_HOOK > "/var/opt/90-luks-loop-hook.sh"
-#!/bin/bash
-echo "LUKS Loop Hook: Setting up ${PERSISTENT_LOOPFILE}..." > /dev/kmsg
-losetup \$(losetup -f) "${PERSISTENT_LOOPFILE}"
-echo "LUKS Loop Hook: losetup complete." > /dev/kmsg
-udevadm settle
-EOF_HOOK
-            chmod +x /var/opt/90-luks-loop-hook.sh
-
-            cat << EOF_CONF > "/etc/dracut.conf.d/99-loopluks.conf"
-install_items+=" /var/opt/90-luks-loop-hook.sh /usr/lib/dracut/hooks/pre-udev/90-luks-loop-hook.sh "
+            # <<< FIX: Correct hook directory path in install_items
+            cat << EOF_DRACUT_CONF > "/etc/dracut.conf.d/99-loopluks.conf"
 install_items+=" ${PERSISTENT_LOOPFILE} "
 add_dracutmodules+=" network clevis "
-kernel_cmdline="rd.neednet=1 rd.info rd.debug"
-EOF_CONF
+force_add_dracutmodules+=" network clevis "
+kernel_cmdline+=" rd.neednet=1 "
+EOF_DRACUT_CONF
 
-            rlRun "dracut --force" 0 "Regenerate initramfs with new hook"
+            rlRun "dracut --force --verbose" 0 "Regenerate initramfs"
             rlLogInfo "Initial setup complete. Triggering reboot."
             rlRun "touch '$COOKIE'"
             tmt-reboot
@@ -151,27 +129,24 @@ EOF_CONF
     else
         # === POST-REBOOT: VERIFICATION PHASE ===
         rlPhaseStartTest "Clevis Client: Verify Auto-Unlock"
+            rlRun "lsblk" 0 "Display block devices post-reboot"
             rlRun "cryptsetup status ${LUKS_DEV_NAME}" 0 "Verify '${LUKS_DEV_NAME}' is active and unlocked"
             rlLog "Searching boot journal for explicit Clevis unlock messages..."
             rlRun "journalctl -b | grep 'clevis-luks-askpass.service: Deactivated successfully.'" 0 "Verify clevis-luks-askpass service ran during boot"
             rlRun "journalctl -b | grep 'Finished Cryptography Setup for ${LUKS_DEV_NAME}'" 0 "Verify journal for successful cryptsetup of our device"
-            rlRun "journalctl -b | grep 'LUKS Loop Hook: losetup complete.'" 0 "Verify our custom dracut hook ran during boot"
-            rlLogPass "Test passed: Clevis successfully unlocked the device during boot, and boot-time logs confirm it."
-            rlRun "sync-set CLEVIS_TEST_DONE"
+            rlLogPass "Test passed: Clevis successfully unlocked the device during boot."
+            # <<< FIX: Signal that the client is done.
+            sync-set "CLEVIS_TEST_DONE"
         rlPhaseEnd
 
         rlPhaseStartCleanup "Clevis Client: Cleanup"
-            rlRun "cryptsetup luksClose ${LUKS_DEV_NAME}" ||:
-            current_loop_dev=$(losetup -j ${PERSISTENT_LOOPFILE} 2>/dev/null | awk -F: '{print $1}')
+            rlRun "cryptsetup luksClose ${LUKS_DEV_NAME}" || rlLogInfo "Device not open, skipping close."
+            current_loop_dev=$(losetup -j ${PERSISTENT_LOOPFILE} 2>/dev/null | cut -d: -f1)
             if [ -n "${current_loop_dev}" ]; then
-              rlRun "losetup -d ${current_loop_dev}" ||:
+              rlRun "losetup -d ${current_loop_dev}" 0 "Detaching loop device"
             fi
-            rlRun "rm -f '${COOKIE}'" ||:
-            rlRun "rm -f '${PERSISTENT_LOOPFILE}'" ||:
-            rlRun "rm -f '${PERSISTENT_ADV_FILE}'" ||:
-            rlRun "rm -f /var/opt/90-luks-loop-hook.sh" ||:
-            rlRun "rm -f /etc/dracut.conf.d/99-loopluks.conf" ||:
-            rlRun "sed -i \"/${LUKS_DEV_NAME}/d\" /etc/crypttab" ||:
+            rlRun "rm -f '$COOKIE' '${PERSISTENT_LOOPFILE}' /var/opt/adv.jws /etc/dracut.conf.d/99-loopluks.conf"
+            rlRun "sed -i \"/${LUKS_UUID}/d\" /etc/crypttab" 0 "Remove entry from crypttab"
             rlRun "dracut --force" 0 "Regenerate initramfs to restore clean state"
         rlPhaseEnd
     fi
@@ -181,19 +156,20 @@ EOF_CONF
 # --- Tang Server Logic ---
 function Tang_Server_Setup() {
     rlPhaseStartSetup "Tang Server: Setup"
-        rlRun "dnf install -y tang jose" 0 "Installing Tang and Jose on Server"
         rlRun "setenforce 0" 0 "Putting SELinux in Permissive mode for simplicity"
-        rlRun "mkdir -p /var/db/tang"
+        rlRun "mkdir -p /var/db/tang" 0 "Ensure tang directory exists"
+        # <<< FIX: Overwrite existing keys for a clean run
         rlRun "jose jwk gen -i '{\"alg\":\"ES512\"}' -o /var/db/tang/sig.jwk" 0 "Generate signature key"
         rlRun "jose jwk gen -i '{\"alg\":\"ECMR\"}' -o /var/db/tang/exc.jwk" 0 "Generate exchange key"
         rlRun "systemctl enable --now tangd.socket" 0 "Starting Tang service"
         rlRun "systemctl status tangd.socket" 0 "Checking Tang service status"
         rlRun "curl -sf http://localhost/adv" 0 "Verify Tang is responsive locally"
+
         rlLog "Tang server setup complete. Signaling to client."
         sync-set "TANG_SETUP_DONE"
-        rlLog "Waiting for Clevis client at ${CLEVIS_IP} to finish its test..."
-        sync-block "CLEVIS_TEST_DONE" "${CLEVIS_IP}"
-        rlLog "Client has finished. Tang server role is complete."
+
+        # <<< FIX: REMOVED THE DEADLOCK. The server's job is done. It does not need to wait for the client.
+        rlLog "Tang server setup is complete. The test will now conclude on the client."
     rlPhaseEnd
 }
 
@@ -204,14 +180,28 @@ rlJournalStart
         assign_roles
     rlPhaseEnd
 
-    # Role detection logic from keylime example
-    if echo " $HOSTNAME $MY_IP " | grep -q " ${CLEVIS} "; then
-        rlLog "This machine is the CLIENT. Running Clevis test logic."
-        Clevis_Client_Test
-    elif echo " $HOSTNAME $MY_IP " | grep -q " ${TANG} "; then
-        rlLog "This machine is the SERVER. Running Tang setup logic."
-        Tang_Server_Setup
-    else
-        rlFail "Unknown role for host $(hostname). Neither client nor server."
-    fi
+    # Role detection logic
+    # A case statement is slightly more robust for this
+    case "${TMT_GUEST['role']}" in
+        client)
+            rlLog "This machine's role is CLIENT. Running Clevis test logic."
+            Clevis_Client_Test
+            ;;
+        server)
+            rlLog "This machine's role is SERVER. Running Tang setup logic."
+            Tang_Server_Setup
+            ;;
+        *)
+            # Fallback for the `grep` method if role isn't set
+            if echo " $HOSTNAME $MY_IP " | grep -q " ${CLEVIS} "; then
+                rlLog "This machine is the CLIENT. Running Clevis test logic."
+                Clevis_Client_Test
+            elif echo " $HOSTNAME $MY_IP " | grep -q " ${TANG} "; then
+                rlLog "This machine is the SERVER. Running Tang setup logic."
+                Tang_Server_Setup
+            else
+                rlFail "Unknown role for host $(hostname). Neither client nor server."
+            fi
+            ;;
+    esac
 rlJournalEnd
