@@ -29,6 +29,7 @@
 . /usr/share/beakerlib/beakerlib.sh || exit 1
 
 # --- Configuration ---
+# --- Configuration ---
 COOKIE="/var/opt/clevis_setup_done"
 PERSISTENT_LOOPFILE="/var/opt/loopfile"
 LUKS_DEV_NAME="myluksdev"
@@ -133,9 +134,7 @@ EOF_DRACUT_CONF
             rlRun "journalctl -b | grep 'Finished Cryptography Setup for ${LUKS_DEV_NAME}'" 0 "Verify journal for successful cryptsetup of our device"
             rlLogPass "Test passed: Clevis successfully unlocked the device during boot."
             
-            # Set the SYNC_PROVIDER to the server's IP
             export SYNC_PROVIDER=${TANG_IP}
-            # Now sync-set will send the status to the server
             rlRun "sync-set CLEVIS_TEST_DONE" 0 "Setting that Clevis part is done"
         rlPhaseEnd
 
@@ -158,15 +157,13 @@ function Tang_Server_Setup() {
     rlPhaseStartSetup "Tang Server: Setup"
         rlRun "setenforce 0" 0 "Putting SELinux in Permissive mode for simplicity"
         
-        # This block robustly opens the necessary firewall ports.
-        if systemctl is-active --quiet firewalld; then
-            rlLogInfo "firewalld is active, using firewall-cmd."
-            rlRun "firewall-cmd --add-port=${SYNC_GET_PORT}/tcp" 0 "Open sync-get port"
-            rlRun "firewall-cmd --add-port=${SYNC_SET_PORT}/tcp" 0 "Open sync-set port"
-        else
-            rlLogInfo "firewalld not active, using nft."
-            rlRun "nft add rule inet filter input tcp dport { ${SYNC_GET_PORT}, ${SYNC_SET_PORT} } accept" 0 "Open sync ports using nft"
-        fi
+        # <<< THE FIX: Ensure firewalld is running and configured.
+        rlRun "dnf install -y firewalld" 0 "Install firewalld package"
+        rlRun "systemctl enable --now firewalld" 0 "Start and enable firewalld service"
+        rlRun "firewall-cmd --add-port=${SYNC_GET_PORT}/tcp --permanent" 0 "Permanently open sync-get port"
+        rlRun "firewall-cmd --add-port=${SYNC_SET_PORT}/tcp --permanent" 0 "Permanently open sync-set port"
+        rlRun "firewall-cmd --add-service=http --permanent" 0 "Permanently open http for Tang"
+        rlRun "firewall-cmd --reload" 0 "Reload firewall to apply permanent rules"
         
         rlRun "mkdir -p /var/db/tang" 0 "Ensure tang directory exists"
         rlRun "jose jwk gen -i '{\"alg\":\"ES512\"}' -o /var/db/tang/sig.jwk" 0 "Generate signature key"
@@ -178,12 +175,11 @@ function Tang_Server_Setup() {
         rlLog "Tang server setup complete. Signaling to client."
         rlRun "sync-set TANG_SETUP_DONE" 0 "Setting that Tang setup part is done"
 
-        # Start a listener to receive remote status updates from the client
         rlRun "ncat -l -k -p ${SYNC_SET_PORT} >> /var/tmp/sync-status &" 0 "Start sync update listener"
         
         # Use the deadlock-free "smart wait" loop.
         rlLog "Server is now waiting for the client to signal it is finished..."
-        WAIT_TIMEOUT=900 # 15 minutes max wait
+        WAIT_TIMEOUT=900
         while [[ $WAIT_TIMEOUT -gt 0 ]]; do
             if grep -q "CLEVIS_TEST_DONE" "/var/tmp/sync-status"; then
                 rlLog "Client has signaled completion. Server can now exit."
@@ -198,6 +194,7 @@ function Tang_Server_Setup() {
         fi
     rlPhaseEnd
 }
+
 # --- Main Execution Logic ---
 rlJournalStart
     rlPhaseStartSetup "Global Setup"
