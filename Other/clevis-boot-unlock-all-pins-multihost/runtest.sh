@@ -204,7 +204,7 @@ function Tang_Server_Setup() {
 # --- Main Execution Logic ---
 rlJournalStart
     rlPhaseStartSetup "Global Setup"
-        get_all_ips
+        assign_roles
     rlPhaseEnd
 
     # Role detection logic from keylime example
