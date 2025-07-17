@@ -32,6 +32,8 @@
 COOKIE="/var/opt/clevis_setup_done"
 PERSISTENT_LOOPFILE="/var/opt/loopfile"
 LUKS_DEV_NAME="myluksdev"
+SYNC_GET_PORT=2134  # Port for sync-block to get status
+SYNC_SET_PORT=2135  # Port for remote sync-set to send status
 
 # --- IP Assignment ---
 function get_IP() {
@@ -77,12 +79,10 @@ function Clevis_Client_Test() {
     if [ ! -f "$COOKIE" ]; then
         # === PRE-REBOOT: SETUP PHASE ===
         rlPhaseStartSetup "Clevis Client: Initial Setup"
-            # 1. WAIT for the server to be ready.
             rlLog "Waiting for Tang server at ${TANG_IP} to be ready..."
             rlRun "sync-block TANG_SETUP_DONE ${TANG_IP}" 0 "Waiting for Tang setup part"
-            
-            # 2. WORK once unblocked.
             rlLog "Tang server is ready. Proceeding with client setup."
+
             rlRun "mkdir -p /var/opt"
             rlRun "dd if=/dev/zero of=${PERSISTENT_LOOPFILE} bs=1M count=100" 0 "Create 100MB loopfile"
             LOOP_DEV=$(losetup -f --show "${PERSISTENT_LOOPFILE}")
@@ -133,7 +133,9 @@ EOF_DRACUT_CONF
             rlRun "journalctl -b | grep 'Finished Cryptography Setup for ${LUKS_DEV_NAME}'" 0 "Verify journal for successful cryptsetup of our device"
             rlLogPass "Test passed: Clevis successfully unlocked the device during boot."
             
-            # 3. SIGNAL that the test is complete.
+            # Set the SYNC_PROVIDER to the server's IP
+            export SYNC_PROVIDER=${TANG_IP}
+            # Now sync-set will send the status to the server
             rlRun "sync-set CLEVIS_TEST_DONE" 0 "Setting that Clevis part is done"
         rlPhaseEnd
 
@@ -154,8 +156,18 @@ EOF_DRACUT_CONF
 # --- Tang Server Logic ---
 function Tang_Server_Setup() {
     rlPhaseStartSetup "Tang Server: Setup"
-        # 1. SETUP & SIGNAL: Set up the service and signal that it's ready.
         rlRun "setenforce 0" 0 "Putting SELinux in Permissive mode for simplicity"
+        
+        # This block robustly opens the necessary firewall ports.
+        if systemctl is-active --quiet firewalld; then
+            rlLogInfo "firewalld is active, using firewall-cmd."
+            rlRun "firewall-cmd --add-port=${SYNC_GET_PORT}/tcp" 0 "Open sync-get port"
+            rlRun "firewall-cmd --add-port=${SYNC_SET_PORT}/tcp" 0 "Open sync-set port"
+        else
+            rlLogInfo "firewalld not active, using nft."
+            rlRun "nft add rule inet filter input tcp dport { ${SYNC_GET_PORT}, ${SYNC_SET_PORT} } accept" 0 "Open sync ports using nft"
+        fi
+        
         rlRun "mkdir -p /var/db/tang" 0 "Ensure tang directory exists"
         rlRun "jose jwk gen -i '{\"alg\":\"ES512\"}' -o /var/db/tang/sig.jwk" 0 "Generate signature key"
         rlRun "jose jwk gen -i '{\"alg\":\"ECMR\"}' -o /var/db/tang/exc.jwk" 0 "Generate exchange key"
@@ -166,7 +178,10 @@ function Tang_Server_Setup() {
         rlLog "Tang server setup complete. Signaling to client."
         rlRun "sync-set TANG_SETUP_DONE" 0 "Setting that Tang setup part is done"
 
-        # 2. WAIT: Now, enter a deadlock-free wait for the client's final "done" signal.
+        # Start a listener to receive remote status updates from the client
+        rlRun "ncat -l -k -p ${SYNC_SET_PORT} >> /var/tmp/sync-status &" 0 "Start sync update listener"
+        
+        # Use the deadlock-free "smart wait" loop.
         rlLog "Server is now waiting for the client to signal it is finished..."
         WAIT_TIMEOUT=900 # 15 minutes max wait
         while [[ $WAIT_TIMEOUT -gt 0 ]]; do
@@ -183,7 +198,6 @@ function Tang_Server_Setup() {
         fi
     rlPhaseEnd
 }
-
 # --- Main Execution Logic ---
 rlJournalStart
     rlPhaseStartSetup "Global Setup"
