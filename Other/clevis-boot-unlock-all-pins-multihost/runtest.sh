@@ -79,7 +79,7 @@ function Clevis_Client_Test() {
         # === PRE-REBOOT: SETUP PHASE ===
         rlPhaseStartSetup "Clevis Client: Initial Setup"
             rlLog "Waiting for Tang server at ${TANG_IP} to be ready..."
-            sync-block "TANG_SETUP_DONE" "${TANG_IP}"
+            rlRun "sync-block TANG_SETUP_DONE" "${TANG_IP}" "Waiting for Tang setup part"
             rlLog "Tang server is ready. Proceeding with client setup."
 
             rlRun "mkdir -p /var/opt"
@@ -136,7 +136,7 @@ EOF_DRACUT_CONF
             rlRun "journalctl -b | grep 'Finished Cryptography Setup for ${LUKS_DEV_NAME}'" 0 "Verify journal for successful cryptsetup of our device"
             rlLogPass "Test passed: Clevis successfully unlocked the device during boot."
             # <<< FIX: Signal that the client is done.
-            sync-set "CLEVIS_TEST_DONE"
+            rlRun "sync-set CLEVIS_TEST_DONE" 0 "Setting that Clevis part is done"
         rlPhaseEnd
 
         rlPhaseStartCleanup "Clevis Client: Cleanup"
@@ -166,7 +166,7 @@ function Tang_Server_Setup() {
         rlRun "curl -sf http://localhost/adv" 0 "Verify Tang is responsive locally"
 
         rlLog "Tang server setup complete. Signaling to client."
-        sync-set "TANG_SETUP_DONE"
+        rlRun "sync-set TANG_SETUP_DONE" "Setting that Tang setup part is done"
 
         # <<< FIX: This is the "smart wait" logic.
         # Instead of a fixed sleep, we will now poll the local sync status file
