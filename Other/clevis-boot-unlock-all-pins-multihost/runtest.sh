@@ -144,6 +144,43 @@ EOF_DRACUT_CONF
             export SYNC_PROVIDER=${TANG_IP}
             rlRun "sync-set CLEVIS_TEST_DONE" 0 "Setting that Clevis part is done"
         rlPhaseEnd
+
+        rlPhaseStartCleanup "Clevis Client: Cleanup"
+            rlRun "cryptsetup luksClose ${LUKS_DEV_NAME}" || rlLogInfo "Device not open, skipping close."
+            current_loop_dev=$(losetup -j ${PERSISTENT_LOOPFILE} 2>/dev/null | cut -d: -f1)
+            if [ -n "${current_loop_dev}" ]; then
+              rlRun "losetup -d ${current_loop_dev}" 0 "Detaching loop device"
+            fi
+            rlRun "rm -f '$COOKIE' '${PERSISTENT_LOOPFILE}' /var/opt/adv.jws /etc/dracut.conf.d/99-loopluks.conf /tmp/adv.jws /tmp/trust.jwk"
+            rlRun "sed -i \"/${LUKS_UUID}/d\" /etc/crypttab" 0 "Remove entry from crypttab"
+            rlRun "dracut --force" 0 "Regenerate initramfs to restore clean state"
+        rlPhaseEnd
+    fi
+}
+
+
+# --- Tang Server Logic ---
+function Tang_Server_Setup() {
+    rlPhaseStartSetup "Tang Server: Setup"
+        rlRun "setenforce 0" 0 "Putting SELinux in Permissive mode for simplicity"
+        # rlRun "systemctl enable --now firewalld" 0 "Start and enable firewalld service"
+        # rlRun "firewall-cmd --add-port=${SYNC_GET_PORT}/tcp --permanent" 0 "Permanently open sync-get port"
+        # rlRun "firewall-cmd --add-port=${SYNC_SET_PORT}/tcp --permanent" 0 "Permanently open sync-set port"
+        # rlRun "firewall-cmd --add-service=http --permanent" 0 "Permanently open http for Tang"
+        # rlRun "firewall-cmd --reload" 0 "Reload firewall to apply permanent rules"
+        
+        rlRun "mkdir -p /var/db/tang" 0 "Ensure tang directory exists"
+        rlRun "jose jwk gen -i '{\"alg\":\"ES512\"}' -o /var/db/tang/sig.jwk" 0 "Generate signature key"
+        rlRun "jose jwk gen -i '{\"alg\":\"ECMR\"}' -o /var/db/tang/exc.jwk" 0 "Generate exchange key"
+        rlRun "systemctl enable --now tangd.socket" 0 "Starting Tang service"
+        rlRun "systemctl status tangd.socket" 0 "Checking Tang service status"
+        rlRun "curl -sf http://${TANG_IP}/adv" 0 "Verify Tang is responsive locally"
+
+        rlLog "Tang server setup complete. Signaling to client."
+        rlRun "sync-set TANG_SETUP_DONE" 0 "Setting that Tang setup part is done"
+        rlRUn "sync-block CLEVIS_TEST_DONE" 0 "Waiting for the Clevis test"
+        rlLog "Server is now waiting for the client to signal it is finished..."
+    rlPhaseEnd
 }
 
 # --- Main Execution Logic ---
