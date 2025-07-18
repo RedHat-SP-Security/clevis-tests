@@ -74,57 +74,53 @@ function assign_roles() {
 # --- Clevis Client Logic ---
 function Clevis_Client_Test() {
     if [ ! -f "$COOKIE" ]; then
+        # === PRE-REBOOT: SETUP PHASE ===
         rlPhaseStartSetup "Clevis Client: Initial Setup"
-            rlRun "dnf install jq" 0 "Install jq"
             rlLog "Waiting for Tang server at ${TANG_IP} to be ready..."
             rlRun "sync-block TANG_SETUP_DONE ${TANG_IP}" 0 "Waiting for Tang setup part"
 
-            rlRun "mkdir -p /var/opt /etc/clevis-test-data"
-            echo "$TANG_IP" > "$TANG_IP_FILE"
-
+            rlRun "mkdir -p /var/opt"
             rlRun "dd if=/dev/zero of=${PERSISTENT_LOOPFILE} bs=1M count=512" 0 "Create 512MB loopfile"
             LOOP_DEV=$(losetup -f --show "${PERSISTENT_LOOPFILE}")
             rlAssertNotEquals "Loop device should be created" "" "$LOOP_DEV"
 
             rlRun "echo -n 'password' | cryptsetup luksFormat ${LOOP_DEV} --type luks2 -" 0 "Format disk with LUKS2"
-            rlRun "echo -n 'password' | cryptsetup luksOpen ${LOOP_DEV} ${LUKS_DEV_NAME} -" 0 "Open LUKS device"
             LUKS_UUID=$(cryptsetup luksUUID "${LOOP_DEV}")
             rlAssertNotEquals "LUKS UUID should not be empty" "" "${LUKS_UUID}"
 
-            rlRun "curl -sf http://${TANG_IP}/adv/jwks > /tmp/trust.jwk"
+            rlRun "curl -sfgo /tmp/adv.jws http://${TANG_IP}/adv" 0 "Download Tang advertisement"
 
-            # TPM2 detection and binding config
+            # 2. Check for a TPM device.
             TPM_PRESENT=0
-            if [ -c /dev/tpmrm0 ]; then
-                TPM_PRESENT=1
-            elif [ -c /dev/tpm0 ]; then
-                ln -sf /dev/tpm0 /dev/tpmrm0
+            if [ -c /dev/tpmrm0 ] || [ -c /dev/tpm0 ]; then
                 TPM_PRESENT=1
             fi
 
+            # 3. Bind using the simple "file path" method.
             if [ $TPM_PRESENT -eq 1 ]; then
-                rlLogInfo "TPM2 present. Using SSS with Tang and TPM2 (t=2)."
-                SSS_CONFIG='{"t":2,"pins":{"tang":[{"url":"http://'"${TANG_IP}"'","trust_keys":"/tmp/trust.jwk"}],"tpm2":{}}}'
-                echo "$SSS_CONFIG" > /tmp/sss.json
-                rlRun "echo -n 'password' | clevis luks bind -f -d \"${LOOP_DEV}\" sss -f /tmp/sss.json" 0 "Bind with TPM2 + Tang (t=2)"
+                rlLogInfo "TPM2 present. Binding with Tang and TPM2 (t=2)."
+                # The JSON is simple: it just points to the advertisement file.
+                SSS_CONFIG='{"t":2,"pins":{"tang":[{"url":"http://'"${TANG_IP}"'","adv":"/tmp/adv.jws"}],"tpm2":{}}}'
+                rlRun "echo -n 'password' | clevis luks bind -f -d \"${LOOP_DEV}\" sss '${SSS_CONFIG}'" 0 "Bind with TPM2 + Tang"
             else
-                rlLogWarning "No TPM2 detected. Using Tang only (t=1)."
-                ADV=$(curl -sf http://${TANG_IP}/adv | jq -Rs .)
-                SSS_CONFIG="{\"t\":1,\"pins\":{\"tang\":[{\"url\":\"http://${TANG_IP}\",\"adv\":${ADV}}]}}"
-                echo "$SSS_CONFIG" > /tmp/sss.json
-                rlRun "echo -n 'password' | clevis luks bind -f -d \"${LOOP_DEV}\" sss -f /tmp/sss.json" 0 "Bind with Tang only (t=1, adv inline)"
+                rlLogWarning "No TPM2 detected. Binding with Tang only (t=1)."
+                # The JSON is simple: it just points to the advertisement file.
+                SSS_CONFIG='{"t":1,"pins":{"tang":[{"url":"http://'"${TANG_IP}"'","adv":"/tmp/adv.jws"}]}}'
+                rlRun "echo -n 'password' | clevis luks bind -f -d \"${LOOP_DEV}\" sss '${SSS_CONFIG}'" 0 "Bind with Tang only"
             fi
+            # --- End of Corrected Logic ---
 
-            grep -q "UUID=${LUKS_UUID}" /etc/crypttab || echo "${LUKS_DEV_NAME} UUID=${LUKS_UUID} none luks,clevis,nofail" >> /etc/crypttab
 
+            # 4. CRITICAL: Add the advertisement file to the initramfs.
+            #    Clevis needs this file at boot time to unlock the device.
             cat << EOF > /etc/dracut.conf.d/99-clevis-loop.conf
-install_items+=" ${PERSISTENT_LOOPFILE} ${TANG_IP_FILE} "
+install_items+=" ${PERSISTENT_LOOPFILE} /tmp/adv.jws "
 add_dracutmodules+=" network clevis "
 force_add_dracutmodules+=" network clevis "
 kernel_cmdline+=" rd.neednet=1 "
 EOF
 
-            rlRun "dracut --force --verbose"
+            rlRun "dracut --force --verbose" 0 "Regenerate initramfs"
             rlRun "touch '$COOKIE'"
             tmt-reboot
         rlPhaseEnd
