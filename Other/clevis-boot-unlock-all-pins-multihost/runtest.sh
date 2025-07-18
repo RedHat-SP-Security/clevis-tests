@@ -158,6 +158,10 @@ function Tang_Server_Setup() {
         rlRun "systemctl enable --now rngd" 0 "Start entropy source"
         rlRun "setenforce 0" 0 "Putting SELinux in Permissive mode for simplicity"
         rlRun "systemctl enable --now firewalld" 0 "Start and enable firewalld service"
+        rlRun "firewall-cmd --add-port=${SYNC_GET_PORT}/tcp --permanent" 0 "Open sync-get port"
+        rlRun "firewall-cmd --add-port=${SYNC_SET_PORT}/tcp --permanent" 0 "Open sync-set port"
+        rlRun "firewall-cmd --add-service=http --permanent" 0 "Allow tangd http port"
+        rlRun "firewall-cmd --reload" 0 "Reload firewall to apply changes"
         rlRun "mkdir -p /var/db/tang" 0 "Ensure tang directory exists"
         rlRun "jose jwk gen -i '{\"alg\":\"ES512\"}' -o /var/db/tang/sig.jwk" 0 "Generate signature key"
         rlRun "jose jwk gen -i '{\"alg\":\"ECMR\"}' -o /var/db/tang/exc.jwk" 0 "Generate exchange key"
@@ -204,6 +208,7 @@ rlJournalStart
         Clevis_Client_Test
     elif echo " $HOSTNAME $MY_IP " | grep -q " ${TANG} "; then
         rlLog "This machine is the SERVER. Running Tang setup logic."
+        sync-init
         Tang_Server_Setup
         Tang_Server_Cleanup
     else
