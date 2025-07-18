@@ -166,17 +166,7 @@ function Tang_Server_Setup() {
         rlRun "curl -sf http://${TANG_IP}/adv"
         rlRun "sync-set TANG_SETUP_DONE"
         rlLog "Waiting for client to finish..."
-        WAIT_TIMEOUT=900
-        while [[ $WAIT_TIMEOUT -gt 0 ]]; do
-            # Use rlRun to check the sync status file to see BeakerLib logs
-            if rlRun "grep -q 'CLEVIS_TEST_DONE' '/var/tmp/sync-status'" 2; then
-                rlLog "Client completed"
-                break
-            fi
-            sleep 10
-            WAIT_TIMEOUT=$((WAIT_TIMEOUT - 10))
-        done
-        [ "$WAIT_TIMEOUT" -le 0 ] && rlFail "Timed out waiting for client"
+        rlRun "sync-block CLEVIS_TEST_DONE ${CLEVIS_IP}" 0 "Wait for Clevis"
     rlPhaseEnd
 }
 
