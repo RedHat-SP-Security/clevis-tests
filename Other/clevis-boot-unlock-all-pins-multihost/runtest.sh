@@ -91,7 +91,6 @@ function Clevis_Client_Test() {
             rlAssertNotEquals "LUKS UUID should not be empty" "" "${LUKS_UUID}"
 
             rlRun "curl -sfgo /tmp/adv.jws http://${TANG_IP}/adv"
-            rlRun "jose jwk thp -i /tmp/adv.jws -o /tmp/trust.jwk"
 
             # Improved TPM2 device detection
             TPM_PRESENT=0
@@ -108,9 +107,8 @@ function Clevis_Client_Test() {
                 rlRun "echo -n 'password' | clevis luks bind -f -d \"${LOOP_DEV}\" sss '${SSS_CONFIG}'" 0 "Bind with TPM2 + Tang (t=2)"
             else
                 rlLogWarning "No TPM2 detected. Using Tang only (t=1)."
-                ADV=$(curl -sf http://${TANG_IP}/adv)
-                SSS_CONFIG="{\"t\":1,\"pins\":{\"tang\":[{\"url\":\"http://${TANG_IP}\",\"adv\":${ADV}}]}}"
-                rlRun "echo -n 'password' | clevis luks bind -f -d \"${LOOP_DEV}\" sss '${SSS_CONFIG}'" 0 "Bind with Tang only (t=1, adv inline)"
+                SSS_CONFIG='{"t":1,"pins":{"tang":[{"url":"http://'"${TANG_IP}"'","adv":"/tmp/adv.jws"}]}}'
+                rlRun "echo -n 'password' | clevis luks bind -f -d \"${LOOP_DEV}\" sss '${SSS_CONFIG}'" 0 "Bind with Tang using adv file path"
             fi
 
             grep -q "UUID=${LUKS_UUID}" /etc/crypttab || echo "${LUKS_DEV_NAME} UUID=${LUKS_UUID} none luks,clevis,nofail" >> /etc/crypttab
