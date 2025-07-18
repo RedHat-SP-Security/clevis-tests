@@ -108,7 +108,7 @@ function Clevis_Client_Test() {
                 rlRun "echo -n 'password' | clevis luks bind -f -d \"${LOOP_DEV}\" sss '${SSS_CONFIG}'" 0 "Bind with TPM2 + Tang (t=2)"
             else
                 rlLogWarning "No TPM2 detected. Using Tang only (t=1)."
-                ADV=$(curl -sf http://${TANG_IP}/adv | jq -Rs '.')
+                ADV=$(curl -sf http://${TANG_IP}/adv | jq -Rs .)
                 SSS_CONFIG="{\"t\":1,\"pins\":{\"tang\":[{\"url\":\"http://${TANG_IP}\",\"adv\":${ADV}}]}}"
                 rlRun "echo -n 'password' | clevis luks bind -f -d \"${LOOP_DEV}\" sss '${SSS_CONFIG}'" 0 "Bind with Tang only (t=1, adv inline)"
             fi
