@@ -79,8 +79,6 @@ function Clevis_Client_Test() {
     if [ ! -f "$COOKIE" ]; then
         # === PRE-REBOOT: SETUP PHASE ===
         rlPhaseStartSetup "Clevis Client: Initial Setup"
-            rlRun "dnf install -y rng-tools" 0 "Install entropy source"
-            rlRun "systemctl enable --now rngd" 0 "Start entropy source"
             rlLog "Waiting for Tang server at ${TANG_IP} to be ready..."
             rlRun "sync-block TANG_SETUP_DONE ${TANG_IP}" 0 "Waiting for Tang setup part"
             rlLog "Tang server is ready. Proceeding with client setup."
@@ -102,14 +100,14 @@ function Clevis_Client_Test() {
             local SSS_CONFIG
             if [ -e "/dev/tpm0" ] || [ -e "/dev/tpmrm0" ]; then
                 rlLogInfo "TPM2 device found. Binding with Tang and TPM2 (t=2)."
-                SSS_CONFIG='{"t":2,"pins":{"tang":[{"url":"http://'"${TANG_IP}"'","adv":"/tmp/adv.jws"}],"tpm2":{}}}'
+                SSS_CONFIG='{"t":2,"pins":{"tang":[{"url":"http://'"${TANG_IP}"'","trust_keys":"/tmp/trust.jwk"}],"tpm2":{}}}'
             else
                 rlLogWarning "TPM2 device not found. Binding with Tang only (t=1)."
-                SSS_CONFIG='{"t":1,"pins":{"tang":[{"url":"http://'"${TANG_IP}"'","adv":"/tmp/adv.jws"}]}}'
+                SSS_CONFIG='{"t":1,"pins":{"tang":[{"url":"http://'"${TANG_IP}"'","trust_keys":"/tmp/trust.jwk"}]}}'
             fi
 
             rlLogInfo "Binding Clevis with SSS config: ${SSS_CONFIG}"
-            rlRun "echo -n password | clevis luks bind -f -k - -d ${LOOP_DEV} sss ${SSS_CONFIG}"
+            rlRun "yes | clevis luks bind -f -d ${LOOP_DEV} sss '${SSS_CONFIG}' <<< 'password'" 0 "Bind Clevis to LUKS device"
             
             rlLogInfo "Adding entry to /etc/crypttab for automatic unlock."
             grep -q "UUID=${LUKS_UUID}" /etc/crypttab || echo "${LUKS_DEV_NAME} UUID=${LUKS_UUID} none luks,clevis,nofail" >> /etc/crypttab
@@ -146,7 +144,7 @@ EOF_DRACUT_CONF
             if [ -n "${current_loop_dev}" ]; then
               rlRun "losetup -d ${current_loop_dev}" 0 "Detaching loop device"
             fi
-            rlRun "rm -f '$COOKIE' '${PERSISTENT_LOOPFILE}' /var/opt/adv.jws /etc/dracut.conf.d/99-loopluks.conf /tmp/adv.jws /tmp/trust.jwk"
+            rlRun "rm -f '$COOKIE' '${PERSISTENT_LOOPFILE}' /etc/dracut.conf.d/99-loopluks.conf /tmp/adv.jws /tmp/trust.jwk"
             rlRun "sed -i \"/${LUKS_UUID}/d\" /etc/crypttab" 0 "Remove entry from crypttab"
             rlRun "dracut --force" 0 "Regenerate initramfs to restore clean state"
         rlPhaseEnd
@@ -157,24 +155,15 @@ EOF_DRACUT_CONF
 # --- Tang Server Logic ---
 function Tang_Server_Setup() {
     rlPhaseStartSetup "Tang Server: Setup"
-        # <<< FIX: Corrected package name from 'jose-util' to 'jose'.
-        rlRun "dnf install -y nmap-ncat jose tang firewalld" 0 "Install server packages"
-        rlRun "dnf install -y rng-tools" 0 "Install entropy source"
         rlRun "systemctl enable --now rngd" 0 "Start entropy source"
         rlRun "setenforce 0" 0 "Putting SELinux in Permissive mode for simplicity"
         rlRun "systemctl enable --now firewalld" 0 "Start and enable firewalld service"
-        rlRun "firewall-cmd --add-port=${SYNC_GET_PORT}/tcp --permanent" 0 "Permanently open sync-get port"
-        rlRun "firewall-cmd --add-port=${SYNC_SET_PORT}/tcp --permanent" 0 "Permanently open sync-set port"
-        rlRun "firewall-cmd --add-service=http --permanent" 0 "Permanently open http for Tang"
-        rlRun "firewall-cmd --reload" 0 "Reload firewall to apply permanent rules"
-        
         rlRun "mkdir -p /var/db/tang" 0 "Ensure tang directory exists"
         rlRun "jose jwk gen -i '{\"alg\":\"ES512\"}' -o /var/db/tang/sig.jwk" 0 "Generate signature key"
         rlRun "jose jwk gen -i '{\"alg\":\"ECMR\"}' -o /var/db/tang/exc.jwk" 0 "Generate exchange key"
         rlRun "systemctl enable --now tangd.socket" 0 "Starting Tang service"
         rlRun "systemctl status tangd.socket" 0 "Checking Tang service status"
         rlRun "curl -sf http://${TANG_IP}/adv" 0 "Verify Tang is responsive locally"
-
         rlLog "Tang server setup complete. Signaling to client."
         rlRun "sync-set TANG_SETUP_DONE" 0 "Setting that Tang setup part is done"
         rlLog "Server is now waiting for the client to signal it is finished..."
@@ -216,6 +205,7 @@ rlJournalStart
     elif echo " $HOSTNAME $MY_IP " | grep -q " ${TANG} "; then
         rlLog "This machine is the SERVER. Running Tang setup logic."
         Tang_Server_Setup
+        Tang_Server_Cleanup
     else
         rlFail "Unknown role for host $(hostname). Neither client nor server."
     fi
