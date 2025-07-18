@@ -7,7 +7,8 @@ test: ./runtest.sh
 require+:
   - clevis
   - clevis-luks
-  - jose-util
+  - jose
+  - socat
   - cryptsetup
   - tang
   - curl
