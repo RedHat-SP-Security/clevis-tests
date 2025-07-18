@@ -32,6 +32,8 @@
 COOKIE="/var/opt/clevis_setup_done"
 PERSISTENT_LOOPFILE="/var/opt/loopfile"
 LUKS_DEV_NAME="myluksdev"
+SYNC_GET_PORT=2134
+SYNC_SET_PORT=2135
 
 # --- IP Assignment ---
 function get_IP() {
@@ -77,7 +79,8 @@ function Clevis_Client_Test() {
     if [ ! -f "$COOKIE" ]; then
         # === PRE-REBOOT: SETUP PHASE ===
         rlPhaseStartSetup "Clevis Client: Initial Setup"
-            rlRun "dnf install -y nmap-ncat jose-util" 0 "Install client helper packages"
+            # <<< FIX: Corrected package name from 'jose-util' to 'jose'.
+            rlRun "dnf install -y nmap-ncat jose" 0 "Install client helper packages"
             rlLog "Waiting for Tang server at ${TANG_IP} to be ready..."
             rlRun "sync-block TANG_SETUP_DONE ${TANG_IP}" 0 "Waiting for Tang setup part"
             rlLog "Tang server is ready. Proceeding with client setup."
@@ -106,7 +109,8 @@ function Clevis_Client_Test() {
             fi
 
             rlLogInfo "Binding Clevis with SSS config: ${SSS_CONFIG}"
-            rlRun "clevis luks bind -f -d ${LOOP_DEV} sss '${SSS_CONFIG}' <<< 'password'" 0 "Bind Clevis to LUKS device"
+            # <<< FIX: Pipe 'yes' to the command to forcefully answer any trust prompts.
+            rlRun "yes | clevis luks bind -f -d ${LOOP_DEV} sss '${SSS_CONFIG}' <<< 'password'" 0 "Bind Clevis to LUKS device"
             
             rlLogInfo "Adding entry to /etc/crypttab for automatic unlock."
             grep -q "UUID=${LUKS_UUID}" /etc/crypttab || echo "${LUKS_DEV_NAME} UUID=${LUKS_UUID} none luks,clevis,nofail" >> /etc/crypttab
@@ -133,6 +137,7 @@ EOF_DRACUT_CONF
             rlRun "journalctl -b | grep 'Finished Cryptography Setup for ${LUKS_DEV_NAME}'" 0 "Verify journal for successful cryptsetup of our device"
             rlLogPass "Test passed: Clevis successfully unlocked the device during boot."
             
+            export SYNC_PROVIDER=${TANG_IP}
             rlRun "sync-set CLEVIS_TEST_DONE" 0 "Setting that Clevis part is done"
         rlPhaseEnd
 
@@ -153,8 +158,14 @@ EOF_DRACUT_CONF
 # --- Tang Server Logic ---
 function Tang_Server_Setup() {
     rlPhaseStartSetup "Tang Server: Setup"
-        rlRun "dnf install -y nmap-ncat jose-util tang" 0 "Install server packages"
+        # <<< FIX: Corrected package name from 'jose-util' to 'jose'.
+        rlRun "dnf install -y nmap-ncat jose tang firewalld" 0 "Install server packages"
         rlRun "setenforce 0" 0 "Putting SELinux in Permissive mode for simplicity"
+        rlRun "systemctl enable --now firewalld" 0 "Start and enable firewalld service"
+        rlRun "firewall-cmd --add-port=${SYNC_GET_PORT}/tcp --permanent" 0 "Permanently open sync-get port"
+        rlRun "firewall-cmd --add-port=${SYNC_SET_PORT}/tcp --permanent" 0 "Permanently open sync-set port"
+        rlRun "firewall-cmd --add-service=http --permanent" 0 "Permanently open http for Tang"
+        rlRun "firewall-cmd --reload" 0 "Reload firewall to apply permanent rules"
         
         rlRun "mkdir -p /var/db/tang" 0 "Ensure tang directory exists"
         rlRun "jose jwk gen -i '{\"alg\":\"ES512\"}' -o /var/db/tang/sig.jwk" 0 "Generate signature key"
@@ -166,7 +177,8 @@ function Tang_Server_Setup() {
         rlLog "Tang server setup complete. Signaling to client."
         rlRun "sync-set TANG_SETUP_DONE" 0 "Setting that Tang setup part is done"
 
-        # This "smart wait" loop keeps the server script alive until the client is done.
+        rlRun "ncat -l -k -p ${SYNC_SET_PORT} >> /var/tmp/sync-status &" 0 "Start sync update listener"
+        
         rlLog "Server is now waiting for the client to signal it is finished..."
         WAIT_TIMEOUT=900
         while [[ $WAIT_TIMEOUT -gt 0 ]]; do
@@ -184,6 +196,15 @@ function Tang_Server_Setup() {
     rlPhaseEnd
 }
 
+function Tang_Server_Cleanup() {
+    rlPhaseStartCleanup "Tang Server: Cleanup"
+        pkill -f "ncat -l -k -p ${SYNC_SET_PORT}" || true
+        rlRun "firewall-cmd --remove-port=${SYNC_GET_PORT}/tcp --permanent" 0 "Close sync-get port"
+        rlRun "firewall-cmd --remove-port=${SYNC_SET_PORT}/tcp --permanent" 0 "Close sync-set port"
+        rlRun "firewall-cmd --remove-service=http --permanent" 0 "Close http port"
+        rlRun "firewall-cmd --reload" 0 "Reload firewall"
+    rlPhaseEnd
+}
 # --- Main Execution Logic ---
 rlJournalStart
     rlPhaseStartSetup "Global Setup"
