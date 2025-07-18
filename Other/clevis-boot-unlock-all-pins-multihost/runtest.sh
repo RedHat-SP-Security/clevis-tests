@@ -109,8 +109,9 @@ function Clevis_Client_Test() {
                 rlLogWarning "No TPM2 detected. Using Tang only (t=1)."
                 SSS_CONFIG='{"t":1,"pins":{"tang":[{"url":"http://'"${TANG_IP}"'","trust_keys":"/tmp/trust.jwk"}]}}'
             fi
-
-            rlRun "echo -n 'password' | clevis luks bind -d ${LOOP_DEV} sss -f \"${SSS_CONFIG}\"" 0 "Bind Clevis to LUKS device"
+            
+            echo "$SSS_CONFIG" > /tmp/sss.json
+            rlRun "echo -n 'password' | clevis luks bind -d ${LOOP_DEV} sss -f /tmp/sss.json" 0 "Bind Clevis to LUKS device"
             grep -q "UUID=${LUKS_UUID}" /etc/crypttab || echo "${LUKS_DEV_NAME} UUID=${LUKS_UUID} none luks,clevis,nofail" >> /etc/crypttab
 
             cat << EOF > /etc/dracut.conf.d/99-clevis-loop.conf
