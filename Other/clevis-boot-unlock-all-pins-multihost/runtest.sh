@@ -79,8 +79,8 @@ function Clevis_Client_Test() {
     if [ ! -f "$COOKIE" ]; then
         # === PRE-REBOOT: SETUP PHASE ===
         rlPhaseStartSetup "Clevis Client: Initial Setup"
-            # <<< FIX: Corrected package name from 'jose-util' to 'jose'.
-            rlRun "dnf install -y nmap-ncat jose" 0 "Install client helper packages"
+            rlRun "dnf install -y rng-tools" 0 "Install entropy source"
+            rlRun "systemctl enable --now rngd" 0 "Start entropy source"
             rlLog "Waiting for Tang server at ${TANG_IP} to be ready..."
             rlRun "sync-block TANG_SETUP_DONE ${TANG_IP}" 0 "Waiting for Tang setup part"
             rlLog "Tang server is ready. Proceeding with client setup."
@@ -160,6 +160,8 @@ function Tang_Server_Setup() {
     rlPhaseStartSetup "Tang Server: Setup"
         # <<< FIX: Corrected package name from 'jose-util' to 'jose'.
         rlRun "dnf install -y nmap-ncat jose tang firewalld" 0 "Install server packages"
+        rlRun "dnf install -y rng-tools" 0 "Install entropy source"
+        rlRun "systemctl enable --now rngd" 0 "Start entropy source"
         rlRun "setenforce 0" 0 "Putting SELinux in Permissive mode for simplicity"
         rlRun "systemctl enable --now firewalld" 0 "Start and enable firewalld service"
         rlRun "firewall-cmd --add-port=${SYNC_GET_PORT}/tcp --permanent" 0 "Permanently open sync-get port"
