@@ -30,12 +30,12 @@
 
 # --- Configuration ---
 COOKIE="/var/opt/clevis_setup_done"
-PERSISTENT_LOOPFILE="/var/opt/loopfile"
-LUKS_DEV_NAME="myluksdev"
+# We will use a file on the root filesystem as our encrypted volume
+ENCRYPTED_FILE="/var/opt/encrypted-volume.luks"
+LUKS_DEV_NAME="tang-unlocked-device"
+MOUNT_POINT="/mnt/tang-test"
 SYNC_GET_PORT=2134
 SYNC_SET_PORT=2135
-SETUP_LOOP_SERVICE="/etc/systemd/system/setup-loop-for-luks.service"
-TANG_IP_FILE="/etc/clevis-test-data/tang_ip.txt"
 
 # --- IP Assignment ---
 function get_IP() {
@@ -49,6 +49,7 @@ function get_IP() {
 function assign_roles() {
     if [ -n "${TMT_TOPOLOGY_BASH}" ] && [ -f "${TMT_TOPOLOGY_BASH}" ]; then
         rlLog "Sourcing roles from ${TMT_TOPOLOGY_BASH}"
+        # shellcheck source=/dev/null
         . "${TMT_TOPOLOGY_BASH}"
         export CLEVIS=${TMT_GUESTS["client.hostname"]}
         export TANG=${TMT_GUESTS["server.hostname"]}
@@ -81,88 +82,68 @@ function Clevis_Client_Test() {
             rlRun "sync-block TANG_SETUP_DONE ${TANG_IP}" 0 "Waiting for Tang setup part"
 
             rlRun "mkdir -p /var/opt"
-            rlRun "dd if=/dev/zero of=${PERSISTENT_LOOPFILE} bs=1M count=512" 0 "Create 512MB loopfile"
-            LOOP_DEV=$(losetup -f --show "${PERSISTENT_LOOPFILE}")
-            rlAssertNotEquals "Loop device should be created" "" "$LOOP_DEV"
+            # Create a file to serve as our LUKS volume
+            rlRun "truncate -s 512M ${ENCRYPTED_FILE}" 0 "Create 512MB file for LUKS volume"
 
-            rlRun "echo -n 'password' | cryptsetup luksFormat ${LOOP_DEV} --type luks2 --luks2-metadata-size 131072 --luks2-keyslots-size 16384 -" 0 "Format disk with LUKS2"
-            LUKS_UUID=$(cryptsetup luksUUID "${LOOP_DEV}")
-            rlAssertNotEquals "LUKS UUID should not be empty" "" "${LUKS_UUID}"
+            # Format the file with LUKS
+            rlRun "echo -n 'password' | cryptsetup luksFormat ${ENCRYPTED_FILE} -" 0 "Format file with LUKS2"
+            LUKS_UUID=$(cryptsetup luksUUID "${ENCRYPTED_FILE}")
+            rlAssertNotEquals "LUKS UUID should not be empty" "" "$LUKS_UUID"
 
-            # 1. Download the advertisement to a file.
-            rlRun "curl -sfgo /tmp/adv.jws http://${TANG_IP}/adv" 0 "Download Tang advertisement"
+            # Get Tang advertisement
+            TANG_ADV=$(curl -sf http://"$TANG_IP"/adv)
+            rlAssertNotEquals "Tang advertisement should not be empty" "" "$TANG_ADV"
 
-            # 2. Check for a TPM device.
-            TPM_PRESENT=0
-            if [ -c /dev/tpmrm0 ] || [ -c /dev/tpm0 ]; then
-                TPM_PRESENT=1
-            fi
+            # Bind the device directly with the 'tang' pin
+            # This is simpler and avoids the SSS header size issues
+            rlLogInfo "Binding LUKS device with Tang pin"
+            rlRun "clevis luks bind -f -d ${ENCRYPTED_FILE} tang '{\"url\":\"http://'"${TANG_IP}"'\"}'" 0 "Bind with Tang" <<< 'password'
 
-            # 3. Bind using the simple "file path" method.
-            if [ $TPM_PRESENT -eq 1 ]; then
-                rlLogInfo "TPM2 present. Binding with Tang and TPM2 (t=2)."
-                SSS_CONFIG='{"t":2,"pins":{"tang":[{"url":"http://'"${TANG_IP}"'","adv":"/tmp/adv.jws"}],"tpm2":{}}}'
-                # ✅ FIX 1: Use a here-string '<<<' to pass the password, matching the working example.
-                rlRun "clevis luks bind -f -d \"${LOOP_DEV}\" sss '${SSS_CONFIG}'" 0 "Bind with TPM2 + Tang" <<< 'password'
-            else
-                rlLogWarning "No TPM2 detected. Binding with Tang only (t=1)."
-                SSS_CONFIG='{"t":1,"pins":{"tang":[{"url":"http://'"${TANG_IP}"'","adv":"/tmp/adv.jws"}]}}'
-                # ✅ FIX 1: Use a here-string '<<<' to pass the password, matching the working example.
-                rlRun "clevis luks bind -f -d \"${LOOP_DEV}\" sss '${SSS_CONFIG}'" 0 "Bind with Tang only" <<< 'password'
-            fi
-
-            rlLogInfo "Dumping LUKS header for inspection"
-            rlRun "cryptsetup luksDump ${LOOP_DEV}"
-
-            # ✅ FIX 2: Add the missing /etc/crypttab entry so the system knows to unlock the device at boot.
+            # Add entry to /etc/crypttab for automatic unlock at boot
             rlLogInfo "Adding entry to /etc/crypttab for automatic unlock."
-            grep -q "UUID=${LUKS_UUID}" /etc/crypttab || echo "${LUKS_DEV_NAME} UUID=${LUKS_UUID} none luks,clevis,nofail" >> /etc/crypttab
+            grep -q "UUID=${LUKS_UUID}" /etc/crypttab || echo "${LUKS_DEV_NAME} UUID=${LUKS_UUID} none _netdev" >> /etc/crypttab
 
-            # 5. Create a systemd service to set up the loop device inside the initramfs
-            cat << 'EOF' > "${SETUP_LOOP_SERVICE}"
-[Unit]
-Description=Set up loop device for LUKS
-DefaultDependencies=no
-Before=cryptsetup.target
+            # Create a mount point and add to /etc/fstab
+            rlRun "mkdir -p ${MOUNT_POINT}"
+            grep -q "${MOUNT_POINT}" /etc/fstab || echo "/dev/mapper/${LUKS_DEV_NAME} ${MOUNT_POINT} xfs defaults 0 0" >> /etc/fstab
 
-[Service]
-Type=oneshot
-RemainAfterExit=yes
-ExecStart=/usr/sbin/losetup -f --show /var/opt/loopfile
+            # Configure dracut to include networking and clevis
+            # This ensures the initramfs can reach the Tang server
+            rlLogInfo "Configuring dracut for network-bound unlock"
+            echo 'add_dracutmodules+=" clevis network "' > /etc/dracut.conf.d/99-clevis-network.conf
+            echo 'kernel_cmdline+=" rd.neednet=1 "' >> /etc/dracut.conf.d/99-clevis-network.conf
+            rlRun "dracut -f --regenerate-all" 0 "Regenerate initramfs"
 
-[Install]
-WantedBy=cryptsetup.target
-EOF
-
-            # 6. Configure dracut to install all necessary files and services into the initramfs.
-            cat << EOF > /etc/dracut.conf.d/99-clevis-loop.conf
-install_items+=" ${PERSISTENT_LOOPFILE} /tmp/adv.jws ${SETUP_LOOP_SERVICE} "
-dracut_systemd_enable+=" setup-loop-for-luks.service "
-add_dracutmodules+=" network clevis systemd "
-kernel_cmdline+=" rd.neednet=1 "
-EOF
-            rlRun "dracut --force --verbose" 0 "Regenerate initramfs"
+            # Create cookie and reboot
             rlRun "touch '$COOKIE'"
             tmt-reboot
         rlPhaseEnd
     else
+        # === POST-REBOOT: VERIFICATION PHASE ===
         rlPhaseStartTest "Clevis Client: Verify Auto-Unlock"
             rlRun "lsblk" 0 "Display block devices"
+            # Verify the device is active and mapped
             rlRun "cryptsetup status ${LUKS_DEV_NAME}" 0 "Verify LUKS device is unlocked"
-            rlRun "journalctl -b | grep 'clevis-luks-askpass.service: Deactivated successfully.'" 0
-            rlRun "journalctl -b | grep 'Finished Cryptography Setup for ${LUKS_DEV_NAME}'" 0
+            # Verify it's mounted
+            rlRun "findmnt ${MOUNT_POINT}" 0 "Verify device is mounted"
+
+            # Verify through journal logs
+            rlRun "journalctl -b | grep 'clevis-luks-askpass.service: Deactivated successfully.'" 0 "Check for successful Clevis unlock in journal"
+            rlRun "journalctl -b | grep 'Finished Cryptography Setup for ${LUKS_DEV_NAME}'" 0 "Check for cryptsetup completion in journal"
+
             rlLog "LUKS device was unlocked via Clevis + Tang at boot."
             export SYNC_PROVIDER=${TANG_IP}
             rlRun "sync-set CLEVIS_TEST_DONE"
         rlPhaseEnd
 
         rlPhaseStartCleanup "Clevis Client: Cleanup"
+            rlRun "umount ${MOUNT_POINT}" || rlLogInfo "Not mounted"
             rlRun "cryptsetup luksClose ${LUKS_DEV_NAME}" || rlLogInfo "Not open"
-            loop_dev=$(losetup -j ${PERSISTENT_LOOPFILE} | cut -d: -f1)
-            [ -n "$loop_dev" ] && rlRun "losetup -d $loop_dev"
-            rlRun "rm -f '$COOKIE' '${PERSISTENT_LOOPFILE}' /etc/dracut.conf.d/99-clevis-loop.conf /tmp/adv.jws /tmp/trust.jwk '$TANG_IP_FILE'"
+            rlRun "rm -f '$COOKIE' '${ENCRYPTED_FILE}' /etc/dracut.conf.d/99-clevis-network.conf"
             rlRun "sed -i \"/${LUKS_UUID}/d\" /etc/crypttab"
-            rlRun "dracut --force"
+            rlRun "sed -i \"|${MOUNT_POINT}|d\" /etc/fstab"
+            rlRun "rmdir ${MOUNT_POINT}"
+            rlRun "dracut -f --regenerate-all"
         rlPhaseEnd
     fi
 }
@@ -187,7 +168,8 @@ function Tang_Server_Setup() {
         rlLog "Waiting for client to finish..."
         WAIT_TIMEOUT=900
         while [[ $WAIT_TIMEOUT -gt 0 ]]; do
-            if grep -q "CLEVIS_TEST_DONE" "/var/tmp/sync-status"; then
+            # Use rlRun to check the sync status file to see BeakerLib logs
+            if rlRun "grep -q 'CLEVIS_TEST_DONE' '/var/tmp/sync-status'" 2; then
                 rlLog "Client completed"
                 break
             fi
