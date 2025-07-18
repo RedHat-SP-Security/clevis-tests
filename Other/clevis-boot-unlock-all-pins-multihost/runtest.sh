@@ -110,8 +110,7 @@ function Clevis_Client_Test() {
                 SSS_CONFIG='{"t":1,"pins":{"tang":[{"url":"http://'"${TANG_IP}"'","trust_keys":"/tmp/trust.jwk"}]}}'
             fi
 
-            rlRun "echo -n 'password' | clevis luks bind -d ${LOOP_DEV} sss -f '${SSS_CONFIG}'" "Bind Clevis to LUKS device"
-
+            rlRun "echo -n 'password' | clevis luks bind -d ${LOOP_DEV} sss -f \"${SSS_CONFIG}\"" 0 "Bind Clevis to LUKS device"
             grep -q "UUID=${LUKS_UUID}" /etc/crypttab || echo "${LUKS_DEV_NAME} UUID=${LUKS_UUID} none luks,clevis,nofail" >> /etc/crypttab
 
             cat << EOF > /etc/dracut.conf.d/99-clevis-loop.conf
