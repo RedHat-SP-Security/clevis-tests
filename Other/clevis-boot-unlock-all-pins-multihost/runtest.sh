@@ -102,15 +102,14 @@ function Clevis_Client_Test() {
             local SSS_CONFIG
             if [ -e "/dev/tpm0" ] || [ -e "/dev/tpmrm0" ]; then
                 rlLogInfo "TPM2 device found. Binding with Tang and TPM2 (t=2)."
-                SSS_CONFIG='{"t":2,"pins":{"tang":[{"url":"http://'"${TANG_IP}"'","trust_keys":"/tmp/trust.jwk"}],"tpm2":{}}}'
+                SSS_CONFIG='{"t":2,"pins":{"tang":[{"url":"http://'"${TANG_IP}"'","adv":"/tmp/adv.jws"}],"tpm2":{}}}'
             else
                 rlLogWarning "TPM2 device not found. Binding with Tang only (t=1)."
-                SSS_CONFIG='{"t":1,"pins":{"tang":[{"url":"http://'"${TANG_IP}"'","trust_keys":"/tmp/trust.jwk"}]}}'
+                SSS_CONFIG='{"t":1,"pins":{"tang":[{"url":"http://'"${TANG_IP}"'","adv":"/tmp/adv.jws"}]}}'
             fi
 
             rlLogInfo "Binding Clevis with SSS config: ${SSS_CONFIG}"
-            # <<< FIX: Pipe 'yes' to the command to forcefully answer any trust prompts.
-            rlRun "yes | clevis luks bind -f -d ${LOOP_DEV} sss '${SSS_CONFIG}' <<< 'password'" 0 "Bind Clevis to LUKS device"
+            rlRun "clevis luks bind -f -d ${LOOP_DEV} sss '${SSS_CONFIG}' <<< 'password'" 0 "Bind Clevis to LUKS device (no prompt expected)"
             
             rlLogInfo "Adding entry to /etc/crypttab for automatic unlock."
             grep -q "UUID=${LUKS_UUID}" /etc/crypttab || echo "${LUKS_DEV_NAME} UUID=${LUKS_UUID} none luks,clevis,nofail" >> /etc/crypttab
@@ -178,23 +177,7 @@ function Tang_Server_Setup() {
 
         rlLog "Tang server setup complete. Signaling to client."
         rlRun "sync-set TANG_SETUP_DONE" 0 "Setting that Tang setup part is done"
-
-        rlRun "ncat -l -k -p ${SYNC_SET_PORT} >> /var/tmp/sync-status &" 0 "Start sync update listener"
-        
-        rlLog "Server is now waiting for the client to signal it is finished..."
-        WAIT_TIMEOUT=900
-        while [[ $WAIT_TIMEOUT -gt 0 ]]; do
-            if grep -q "CLEVIS_TEST_DONE" "/var/tmp/sync-status"; then
-                rlLog "Client has signaled completion. Server can now exit."
-                break
-            fi
-            sleep 10
-            WAIT_TIMEOUT=$((WAIT_TIMEOUT - 10))
-        done
-
-        if [[ $WAIT_TIMEOUT -le 0 ]]; then
-            rlFail "Timed out waiting for the client to finish."
-        fi
+        rlRun "sync-block CLEVIS_TEST_DONE" 0 "Waiting for the clevis part"
     rlPhaseEnd
 }
 
