@@ -6,10 +6,7 @@ contact: Adam Prikryl <aprikryl@redhat.com>
 test: ./runtest.sh
 require+:
   - clevis
-  - clevis-luks
   - clevis-dracut
-  - clevis-sss
-  - clevis-tpm2
   - cryptsetup
   - tang
   - curl
