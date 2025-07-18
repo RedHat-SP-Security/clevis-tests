@@ -10,4 +10,8 @@ require+:
   - cryptsetup
   - tang
   - curl
+  - url: https://github.com/RedHat-SP-Security/keylime-tests.git
+    name: /Library/sync
+    type: library
+
 duration: 5m
