@@ -85,7 +85,7 @@ function Clevis_Client_Test() {
             LOOP_DEV=$(losetup -f --show "${PERSISTENT_LOOPFILE}")
             rlAssertNotEquals "Loop device should be created" "" "$LOOP_DEV"
 
-            rlRun "echo -n 'password' | cryptsetup luksFormat ${LOOP_DEV} --type luks2 -" 0 "Format disk with LUKS2"
+            rlRun "echo -n 'password' | cryptsetup luksFormat ${LOOP_DEV} --type luks2 --pbkdf-memory 1048576 -" 0 "Format disk with LUKS2"
             LUKS_UUID=$(cryptsetup luksUUID "${LOOP_DEV}")
             rlAssertNotEquals "LUKS UUID should not be empty" "" "${LUKS_UUID}"
 
