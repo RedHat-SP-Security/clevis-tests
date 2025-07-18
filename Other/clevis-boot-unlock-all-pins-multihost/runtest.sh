@@ -47,13 +47,10 @@ function get_IP() {
 function assign_roles() {
     if [ -n "${TMT_TOPOLOGY_BASH}" ] && [ -f "${TMT_TOPOLOGY_BASH}" ]; then
         rlLog "Sourcing roles from ${TMT_TOPOLOGY_BASH}"
-        # shellcheck source=/dev/null
         . "${TMT_TOPOLOGY_BASH}"
-
         export CLEVIS=${TMT_GUESTS["client.hostname"]}
         export TANG=${TMT_GUESTS["server.hostname"]}
         export MY_IP="${TMT_GUEST[hostname]}"
-
     elif [ -n "$SERVERS" ]; then
         export CLEVIS=$( echo "$SERVERS $CLIENTS" | awk '{ print $1 }')
         export TANG=$( echo "$SERVERS $CLIENTS" | awk '{ print $2 }')
@@ -73,11 +70,9 @@ function assign_roles() {
     rlLog "My Host/IP: $(hostname) / ${MY_IP}"
 }
 
-
 # --- Clevis Client Logic ---
 function Clevis_Client_Test() {
     if [ ! -f "$COOKIE" ]; then
-        # === PRE-REBOOT: SETUP PHASE ===
         rlPhaseStartSetup "Clevis Client: Initial Setup"
             rlLog "Waiting for Tang server at ${TANG_IP} to be ready..."
             rlRun "sync-block TANG_SETUP_DONE ${TANG_IP}" 0 "Waiting for Tang setup part"
@@ -90,14 +85,13 @@ function Clevis_Client_Test() {
             rlLogInfo "Using loop device ${LOOP_DEV} for LUKS."
 
             rlRun "echo -n 'password' | cryptsetup luksFormat ${LOOP_DEV} --type luks2 -" 0 "Format disk with LUKS2"
+            rlRun "echo -n 'password' | cryptsetup luksOpen ${LOOP_DEV} ${LUKS_DEV_NAME} -" 0 "Open LUKS device"
             LUKS_UUID=$(cryptsetup luksUUID "${LOOP_DEV}")
             rlAssertNotEquals "LUKS UUID should not be empty" "" "${LUKS_UUID}"
 
-            rlLogInfo "Automating trust for Tang server keys..."
             rlRun "curl -sfgo /tmp/adv.jws http://${TANG_IP}/adv" 0 "Download advertisement"
             rlRun "jose jwk thp -i /tmp/adv.jws -o /tmp/trust.jwk" 0 "Extract signing keys for trust"
 
-            local SSS_CONFIG
             if [ -e "/dev/tpm0" ] || [ -e "/dev/tpmrm0" ]; then
                 rlLogInfo "TPM2 device found. Binding with Tang and TPM2 (t=2)."
                 SSS_CONFIG='{"t":2,"pins":{"tang":[{"url":"http://'"${TANG_IP}"'","trust_keys":"/tmp/trust.jwk"}],"tpm2":{}}}'
@@ -106,112 +100,101 @@ function Clevis_Client_Test() {
                 SSS_CONFIG='{"t":1,"pins":{"tang":[{"url":"http://'"${TANG_IP}"'","trust_keys":"/tmp/trust.jwk"}]}}'
             fi
 
-            rlLogInfo "Binding Clevis with SSS config: ${SSS_CONFIG}"
-            rlRun "yes | clevis luks bind -f -d ${LOOP_DEV} sss '${SSS_CONFIG}' <<< 'password'" 0 "Bind Clevis to LUKS device"
-            
-            rlLogInfo "Adding entry to /etc/crypttab for automatic unlock."
+            rlLogInfo "Binding Clevis with config: $SSS_CONFIG"
+            echo "$SSS_CONFIG" | clevis luks bind -d "$LOOP_DEV" sss -k - || rlFail "Clevis bind failed"
+
+            rlLog "Adding entry to /etc/crypttab"
             grep -q "UUID=${LUKS_UUID}" /etc/crypttab || echo "${LUKS_DEV_NAME} UUID=${LUKS_UUID} none luks,clevis,nofail" >> /etc/crypttab
 
-            cat << EOF_DRACUT_CONF > "/etc/dracut.conf.d/99-loopluks.conf"
+            cat << EOF > /etc/dracut.conf.d/99-clevis-loop.conf
 install_items+=" ${PERSISTENT_LOOPFILE} "
 add_dracutmodules+=" network clevis "
 force_add_dracutmodules+=" network clevis "
 kernel_cmdline+=" rd.neednet=1 "
-EOF_DRACUT_CONF
+EOF
 
             rlRun "dracut --force --verbose" 0 "Regenerate initramfs"
-            rlLogInfo "Initial setup complete. Triggering reboot."
             rlRun "touch '$COOKIE'"
             tmt-reboot
         rlPhaseEnd
     else
-        # === POST-REBOOT: VERIFICATION PHASE ===
         rlPhaseStartTest "Clevis Client: Verify Auto-Unlock"
-            rlRun "lsblk" 0 "Display block devices post-reboot"
-            rlRun "cryptsetup status ${LUKS_DEV_NAME}" 0 "Verify '${LUKS_DEV_NAME}' is active and unlocked"
-            rlLog "Searching boot journal for explicit Clevis unlock messages..."
-            rlRun "journalctl -b | grep 'clevis-luks-askpass.service: Deactivated successfully.'" 0 "Verify clevis-luks-askpass service ran during boot"
-            rlRun "journalctl -b | grep 'Finished Cryptography Setup for ${LUKS_DEV_NAME}'" 0 "Verify journal for successful cryptsetup of our device"
-            rlLogPass "Test passed: Clevis successfully unlocked the device during boot."
-            
+            rlRun "lsblk" 0 "Display block devices"
+            rlRun "cryptsetup status ${LUKS_DEV_NAME}" 0 "Verify '${LUKS_DEV_NAME}' is unlocked"
+            rlRun "journalctl -b | grep 'clevis-luks-askpass.service: Deactivated successfully.'" 0 "Clevis luks askpass ran"
+            rlRun "journalctl -b | grep 'Finished Cryptography Setup for ${LUKS_DEV_NAME}'" 0 "Crypttab processed"
+            rlLogPass "Device unlocked via Clevis + Tang during boot."
             export SYNC_PROVIDER=${TANG_IP}
-            rlRun "sync-set CLEVIS_TEST_DONE" 0 "Setting that Clevis part is done"
+            rlRun "sync-set CLEVIS_TEST_DONE" 0 "Signal client done"
         rlPhaseEnd
 
         rlPhaseStartCleanup "Clevis Client: Cleanup"
-            rlRun "cryptsetup luksClose ${LUKS_DEV_NAME}" || rlLogInfo "Device not open, skipping close."
-            current_loop_dev=$(losetup -j ${PERSISTENT_LOOPFILE} 2>/dev/null | cut -d: -f1)
-            if [ -n "${current_loop_dev}" ]; then
-              rlRun "losetup -d ${current_loop_dev}" 0 "Detaching loop device"
-            fi
-            rlRun "rm -f '$COOKIE' '${PERSISTENT_LOOPFILE}' /etc/dracut.conf.d/99-loopluks.conf /tmp/adv.jws /tmp/trust.jwk"
-            rlRun "sed -i \"/${LUKS_UUID}/d\" /etc/crypttab" 0 "Remove entry from crypttab"
-            rlRun "dracut --force" 0 "Regenerate initramfs to restore clean state"
+            rlRun "cryptsetup luksClose ${LUKS_DEV_NAME}" || rlLogInfo "Not open"
+            loop_dev=$(losetup -j ${PERSISTENT_LOOPFILE} | cut -d: -f1)
+            [ -n "$loop_dev" ] && rlRun "losetup -d $loop_dev"
+            rlRun "rm -f '$COOKIE' '${PERSISTENT_LOOPFILE}' /etc/dracut.conf.d/99-clevis-loop.conf /tmp/adv.jws /tmp/trust.jwk"
+            rlRun "sed -i \"/${LUKS_UUID}/d\" /etc/crypttab"
+            rlRun "dracut --force"
         rlPhaseEnd
     fi
 }
 
-
 # --- Tang Server Logic ---
 function Tang_Server_Setup() {
     rlPhaseStartSetup "Tang Server: Setup"
-        rlRun "systemctl enable --now rngd" 0 "Start entropy source"
-        rlRun "setenforce 0" 0 "Putting SELinux in Permissive mode for simplicity"
-        rlRun "systemctl enable --now firewalld" 0 "Start and enable firewalld service"
-        rlRun "firewall-cmd --add-port=${SYNC_GET_PORT}/tcp --permanent" 0 "Open sync-get port"
-        rlRun "firewall-cmd --add-port=${SYNC_SET_PORT}/tcp --permanent" 0 "Open sync-set port"
-        rlRun "firewall-cmd --add-service=http --permanent" 0 "Allow tangd http port"
-        rlRun "firewall-cmd --reload" 0 "Reload firewall to apply changes"
-        rlRun "mkdir -p /var/db/tang" 0 "Ensure tang directory exists"
-        rlRun "jose jwk gen -i '{\"alg\":\"ES512\"}' -o /var/db/tang/sig.jwk" 0 "Generate signature key"
-        rlRun "jose jwk gen -i '{\"alg\":\"ECMR\"}' -o /var/db/tang/exc.jwk" 0 "Generate exchange key"
-        rlRun "systemctl enable --now tangd.socket" 0 "Starting Tang service"
-        rlRun "systemctl status tangd.socket" 0 "Checking Tang service status"
-        rlRun "curl -sf http://${TANG_IP}/adv" 0 "Verify Tang is responsive locally"
-        rlLog "Tang server setup complete. Signaling to client."
-        rlRun "sync-set TANG_SETUP_DONE" 0 "Setting that Tang setup part is done"
-        rlLog "Server is now waiting for the client to signal it is finished..."
+        rlRun "systemctl enable --now rngd"
+        rlRun "setenforce 0"
+        rlRun "systemctl enable --now firewalld"
+        rlRun "firewall-cmd --add-port=${SYNC_GET_PORT}/tcp --permanent"
+        rlRun "firewall-cmd --add-port=${SYNC_SET_PORT}/tcp --permanent"
+        rlRun "firewall-cmd --add-service=http --permanent"
+        rlRun "firewall-cmd --reload"
+        rlRun "mkdir -p /var/db/tang"
+        rlRun "jose jwk gen -i '{\"alg\":\"ES512\"}' -o /var/db/tang/sig.jwk"
+        rlRun "jose jwk gen -i '{\"alg\":\"ECMR\"}' -o /var/db/tang/exc.jwk"
+        rlRun "systemctl enable --now tangd.socket"
+        rlRun "systemctl status tangd.socket"
+        rlRun "curl -sf http://${TANG_IP}/adv"
+        rlRun "sync-set TANG_SETUP_DONE"
+        rlLog "Waiting for client to finish..."
         WAIT_TIMEOUT=900
         while [[ $WAIT_TIMEOUT -gt 0 ]]; do
             if grep -q "CLEVIS_TEST_DONE" "/var/tmp/sync-status"; then
-                rlLog "Client has signaled completion. Server can now exit."
+                rlLog "Client completed"
                 break
             fi
             sleep 10
             WAIT_TIMEOUT=$((WAIT_TIMEOUT - 10))
         done
-
-        if [[ $WAIT_TIMEOUT -le 0 ]]; then
-            rlFail "Timed out waiting for the client to finish."
-        fi
+        [ "$WAIT_TIMEOUT" -le 0 ] && rlFail "Timed out waiting for client"
     rlPhaseEnd
 }
 
 function Tang_Server_Cleanup() {
     rlPhaseStartCleanup "Tang Server: Cleanup"
         pkill -f "ncat -l -k -p ${SYNC_SET_PORT}" || true
-        rlRun "firewall-cmd --remove-port=${SYNC_GET_PORT}/tcp --permanent" 0 "Close sync-get port"
-        rlRun "firewall-cmd --remove-port=${SYNC_SET_PORT}/tcp --permanent" 0 "Close sync-set port"
-        rlRun "firewall-cmd --remove-service=http --permanent" 0 "Close http port"
-        rlRun "firewall-cmd --reload" 0 "Reload firewall"
+        rlRun "firewall-cmd --remove-port=${SYNC_GET_PORT}/tcp --permanent"
+        rlRun "firewall-cmd --remove-port=${SYNC_SET_PORT}/tcp --permanent"
+        rlRun "firewall-cmd --remove-service=http --permanent"
+        rlRun "firewall-cmd --reload"
     rlPhaseEnd
 }
-# --- Main Execution Logic ---
+
+# --- Main Execution ---
 rlJournalStart
     rlPhaseStartSetup "Global Setup"
-        rlRun 'rlImport sync' || rlDie "cannot import sync library"
+        rlRun 'rlImport sync' || rlDie "cannot import sync"
         assign_roles
     rlPhaseEnd
 
     if echo " $HOSTNAME $MY_IP " | grep -q " ${CLEVIS} "; then
-        rlLog "This machine is the CLIENT. Running Clevis test logic."
+        rlLog "Running as CLIENT"
         Clevis_Client_Test
     elif echo " $HOSTNAME $MY_IP " | grep -q " ${TANG} "; then
-        rlLog "This machine is the SERVER. Running Tang setup logic."
-        sync-init
+        rlLog "Running as SERVER"
         Tang_Server_Setup
         Tang_Server_Cleanup
     else
-        rlFail "Unknown role for host $(hostname). Neither client nor server."
+        rlFail "Unknown host role"
     fi
 rlJournalEnd
