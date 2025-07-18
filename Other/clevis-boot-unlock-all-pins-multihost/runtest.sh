@@ -34,6 +34,7 @@ PERSISTENT_LOOPFILE="/var/opt/loopfile"
 LUKS_DEV_NAME="myluksdev"
 SYNC_GET_PORT=2134
 SYNC_SET_PORT=2135
+TANG_IP_FILE="/etc/clevis-test-data/tang_ip.txt"
 
 # --- IP Assignment ---
 function get_IP() {
@@ -76,63 +77,70 @@ function Clevis_Client_Test() {
         rlPhaseStartSetup "Clevis Client: Initial Setup"
             rlLog "Waiting for Tang server at ${TANG_IP} to be ready..."
             rlRun "sync-block TANG_SETUP_DONE ${TANG_IP}" 0 "Waiting for Tang setup part"
-            rlLog "Tang server is ready. Proceeding with client setup."
 
-            rlRun "mkdir -p /var/opt"
+            rlRun "mkdir -p /var/opt /etc/clevis-test-data"
+            echo "$TANG_IP" > "$TANG_IP_FILE"
+
             rlRun "dd if=/dev/zero of=${PERSISTENT_LOOPFILE} bs=1M count=100" 0 "Create 100MB loopfile"
             LOOP_DEV=$(losetup -f --show "${PERSISTENT_LOOPFILE}")
             rlAssertNotEquals "Loop device should be created" "" "$LOOP_DEV"
-            rlLogInfo "Using loop device ${LOOP_DEV} for LUKS."
 
             rlRun "echo -n 'password' | cryptsetup luksFormat ${LOOP_DEV} --type luks2 -" 0 "Format disk with LUKS2"
             rlRun "echo -n 'password' | cryptsetup luksOpen ${LOOP_DEV} ${LUKS_DEV_NAME} -" 0 "Open LUKS device"
             LUKS_UUID=$(cryptsetup luksUUID "${LOOP_DEV}")
             rlAssertNotEquals "LUKS UUID should not be empty" "" "${LUKS_UUID}"
 
-            rlRun "curl -sfgo /tmp/adv.jws http://${TANG_IP}/adv" 0 "Download advertisement"
-            rlRun "jose jwk thp -i /tmp/adv.jws -o /tmp/trust.jwk" 0 "Extract signing keys for trust"
+            rlRun "curl -sfgo /tmp/adv.jws http://${TANG_IP}/adv"
+            rlRun "jose jwk thp -i /tmp/adv.jws -o /tmp/trust.jwk"
 
-            if [ -e "/dev/tpm0" ] || [ -e "/dev/tpmrm0" ]; then
-                rlLogInfo "TPM2 device found. Binding with Tang and TPM2 (t=2)."
+            # Improved TPM2 device detection
+            TPM_PRESENT=0
+            if [ -c /dev/tpmrm0 ]; then
+                TPM_PRESENT=1
+            elif [ -c /dev/tpm0 ]; then
+                ln -sf /dev/tpm0 /dev/tpmrm0
+                TPM_PRESENT=1
+            fi
+
+            if [ $TPM_PRESENT -eq 1 ]; then
+                rlLogInfo "TPM2 present. Using SSS with Tang and TPM2 (t=2)."
                 SSS_CONFIG='{"t":2,"pins":{"tang":[{"url":"http://'"${TANG_IP}"'","trust_keys":"/tmp/trust.jwk"}],"tpm2":{}}}'
             else
-                rlLogWarning "TPM2 device not found. Binding with Tang only (t=1)."
+                rlLogWarning "No TPM2 detected. Using Tang only (t=1)."
                 SSS_CONFIG='{"t":1,"pins":{"tang":[{"url":"http://'"${TANG_IP}"'","trust_keys":"/tmp/trust.jwk"}]}}'
             fi
 
-            rlLogInfo "Binding Clevis with config: $SSS_CONFIG"
-            echo "$SSS_CONFIG" | clevis luks bind -d "$LOOP_DEV" sss -k - || rlFail "Clevis bind failed"
+            echo -n 'password' | clevis luks bind -d "$LOOP_DEV" sss -f - <<<"$SSS_CONFIG"
 
-            rlLog "Adding entry to /etc/crypttab"
             grep -q "UUID=${LUKS_UUID}" /etc/crypttab || echo "${LUKS_DEV_NAME} UUID=${LUKS_UUID} none luks,clevis,nofail" >> /etc/crypttab
 
             cat << EOF > /etc/dracut.conf.d/99-clevis-loop.conf
-install_items+=" ${PERSISTENT_LOOPFILE} "
+install_items+=" ${PERSISTENT_LOOPFILE} ${TANG_IP_FILE} "
 add_dracutmodules+=" network clevis "
 force_add_dracutmodules+=" network clevis "
 kernel_cmdline+=" rd.neednet=1 "
 EOF
 
-            rlRun "dracut --force --verbose" 0 "Regenerate initramfs"
+            rlRun "dracut --force --verbose"
             rlRun "touch '$COOKIE'"
             tmt-reboot
         rlPhaseEnd
     else
         rlPhaseStartTest "Clevis Client: Verify Auto-Unlock"
             rlRun "lsblk" 0 "Display block devices"
-            rlRun "cryptsetup status ${LUKS_DEV_NAME}" 0 "Verify '${LUKS_DEV_NAME}' is unlocked"
-            rlRun "journalctl -b | grep 'clevis-luks-askpass.service: Deactivated successfully.'" 0 "Clevis luks askpass ran"
-            rlRun "journalctl -b | grep 'Finished Cryptography Setup for ${LUKS_DEV_NAME}'" 0 "Crypttab processed"
-            rlLogPass "Device unlocked via Clevis + Tang during boot."
+            rlRun "cryptsetup status ${LUKS_DEV_NAME}" 0 "Verify LUKS device is unlocked"
+            rlRun "journalctl -b | grep 'clevis-luks-askpass.service: Deactivated successfully.'" 0
+            rlRun "journalctl -b | grep 'Finished Cryptography Setup for ${LUKS_DEV_NAME}'" 0
+            rlLogPass "LUKS device was unlocked via Clevis + Tang at boot."
             export SYNC_PROVIDER=${TANG_IP}
-            rlRun "sync-set CLEVIS_TEST_DONE" 0 "Signal client done"
+            rlRun "sync-set CLEVIS_TEST_DONE"
         rlPhaseEnd
 
         rlPhaseStartCleanup "Clevis Client: Cleanup"
             rlRun "cryptsetup luksClose ${LUKS_DEV_NAME}" || rlLogInfo "Not open"
             loop_dev=$(losetup -j ${PERSISTENT_LOOPFILE} | cut -d: -f1)
             [ -n "$loop_dev" ] && rlRun "losetup -d $loop_dev"
-            rlRun "rm -f '$COOKIE' '${PERSISTENT_LOOPFILE}' /etc/dracut.conf.d/99-clevis-loop.conf /tmp/adv.jws /tmp/trust.jwk"
+            rlRun "rm -f '$COOKIE' '${PERSISTENT_LOOPFILE}' /etc/dracut.conf.d/99-clevis-loop.conf /tmp/adv.jws /tmp/trust.jwk '$TANG_IP_FILE'"
             rlRun "sed -i \"/${LUKS_UUID}/d\" /etc/crypttab"
             rlRun "dracut --force"
         rlPhaseEnd

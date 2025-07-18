@@ -7,11 +7,13 @@ test: ./runtest.sh
 require+:
   - clevis
   - clevis-luks
-  - jose
-  - socat
+  - clevis-dracut
+  - clevis-sss
+  - clevis-tpm2
   - cryptsetup
   - tang
   - curl
+  - jose
   - url: https://github.com/RedHat-SP-Security/keylime-tests.git
     name: /Library/sync
     type: library
