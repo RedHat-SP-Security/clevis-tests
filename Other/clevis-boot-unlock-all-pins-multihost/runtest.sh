@@ -29,10 +29,11 @@
 . /usr/share/beakerlib/beakerlib.sh || exit 1
 
 # --- Configuration ---
-# --- Configuration ---
 COOKIE="/var/opt/clevis_setup_done"
 PERSISTENT_LOOPFILE="/var/opt/loopfile"
 LUKS_DEV_NAME="myluksdev"
+SYNC_GET_PORT=2134
+SYNC_SET_PORT=2135
 
 # --- IP Assignment ---
 function get_IP() {
@@ -53,7 +54,7 @@ function assign_roles() {
         export TANG=${TMT_GUESTS["server.hostname"]}
         export MY_IP="${TMT_GUEST[hostname]}"
 
-    elif [ -n "$SERVERS" ];
+    elif [ -n "$SERVERS" ]; then
         export CLEVIS=$( echo "$SERVERS $CLIENTS" | awk '{ print $1 }')
         export TANG=$( echo "$SERVERS $CLIENTS" | awk '{ print $2 }')
     fi
@@ -78,6 +79,7 @@ function Clevis_Client_Test() {
     if [ ! -f "$COOKIE" ]; then
         # === PRE-REBOOT: SETUP PHASE ===
         rlPhaseStartSetup "Clevis Client: Initial Setup"
+            # This logic is correct. It waits for the server.
             rlLog "Waiting for Tang server at ${TANG_IP} to be ready..."
             rlRun "sync-block TANG_SETUP_DONE ${TANG_IP}" 0 "Waiting for Tang setup part"
             rlLog "Tang server is ready. Proceeding with client setup."
@@ -92,6 +94,7 @@ function Clevis_Client_Test() {
             LUKS_UUID=$(cryptsetup luksUUID "${LOOP_DEV}")
             rlAssertNotEquals "LUKS UUID should not be empty" "" "${LUKS_UUID}"
 
+            # This block correctly automates trusting the Tang keys.
             rlLogInfo "Automating trust for Tang server keys..."
             rlRun "curl -sfgo /tmp/adv.jws http://${TANG_IP}/adv" 0 "Download advertisement"
             rlRun "jose jwk thp -i /tmp/adv.jws -o /tmp/trust.jwk" 0 "Extract signing keys for trust"
@@ -106,7 +109,7 @@ function Clevis_Client_Test() {
             fi
 
             rlLogInfo "Binding Clevis with SSS config: ${SSS_CONFIG}"
-            rlRun "clevis luks bind -f -d ${LOOP_DEV} sss '${SSS_CONFIG}' <<< 'password'" 0 "Bind Clevis to LUKS device"
+            rlRun "yes | clevis luks bind -f -d ${LOOP_DEV} sss '${SSS_CONFIG}' <<< 'password'" 0 "Bind Clevis to LUKS device"
             
             rlLogInfo "Adding entry to /etc/crypttab for automatic unlock."
             grep -q "UUID=${LUKS_UUID}" /etc/crypttab || echo "${LUKS_DEV_NAME} UUID=${LUKS_UUID} none luks,clevis,nofail" >> /etc/crypttab
@@ -133,6 +136,7 @@ EOF_DRACUT_CONF
             rlRun "journalctl -b | grep 'Finished Cryptography Setup for ${LUKS_DEV_NAME}'" 0 "Verify journal for successful cryptsetup of our device"
             rlLogPass "Test passed: Clevis successfully unlocked the device during boot."
             
+            export SYNC_PROVIDER=${TANG_IP}
             rlRun "sync-set CLEVIS_TEST_DONE" 0 "Setting that Clevis part is done"
         rlPhaseEnd
 
