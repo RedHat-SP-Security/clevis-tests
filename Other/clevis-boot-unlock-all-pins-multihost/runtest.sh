@@ -29,11 +29,10 @@
 . /usr/share/beakerlib/beakerlib.sh || exit 1
 
 # --- Configuration ---
+# --- Configuration ---
 COOKIE="/var/opt/clevis_setup_done"
 PERSISTENT_LOOPFILE="/var/opt/loopfile"
 LUKS_DEV_NAME="myluksdev"
-SYNC_GET_PORT=2134
-SYNC_SET_PORT=2135
 
 # --- IP Assignment ---
 function get_IP() {
@@ -54,7 +53,7 @@ function assign_roles() {
         export TANG=${TMT_GUESTS["server.hostname"]}
         export MY_IP="${TMT_GUEST[hostname]}"
 
-    elif [ -n "$SERVERS" ]; then
+    elif [ -n "$SERVERS" ];
         export CLEVIS=$( echo "$SERVERS $CLIENTS" | awk '{ print $1 }')
         export TANG=$( echo "$SERVERS $CLIENTS" | awk '{ print $2 }')
     fi
@@ -79,7 +78,6 @@ function Clevis_Client_Test() {
     if [ ! -f "$COOKIE" ]; then
         # === PRE-REBOOT: SETUP PHASE ===
         rlPhaseStartSetup "Clevis Client: Initial Setup"
-            # This part is now working correctly.
             rlLog "Waiting for Tang server at ${TANG_IP} to be ready..."
             rlRun "sync-block TANG_SETUP_DONE ${TANG_IP}" 0 "Waiting for Tang setup part"
             rlLog "Tang server is ready. Proceeding with client setup."
@@ -94,15 +92,11 @@ function Clevis_Client_Test() {
             LUKS_UUID=$(cryptsetup luksUUID "${LOOP_DEV}")
             rlAssertNotEquals "LUKS UUID should not be empty" "" "${LUKS_UUID}"
 
-            # <<< THE FIX: Automate trusting the Tang keys.
             rlLogInfo "Automating trust for Tang server keys..."
-            # 1. Fetch the advertisement from the server.
             rlRun "curl -sfgo /tmp/adv.jws http://${TANG_IP}/adv" 0 "Download advertisement"
-            # 2. Extract the signing keys from the advertisement into a trusted JWK file.
             rlRun "jose jwk thp -i /tmp/adv.jws -o /tmp/trust.jwk" 0 "Extract signing keys for trust"
 
             local SSS_CONFIG
-            # 3. Update the SSS config to use the trusted keys.
             if [ -e "/dev/tpm0" ] || [ -e "/dev/tpmrm0" ]; then
                 rlLogInfo "TPM2 device found. Binding with Tang and TPM2 (t=2)."
                 SSS_CONFIG='{"t":2,"pins":{"tang":[{"url":"http://'"${TANG_IP}"'","trust_keys":"/tmp/trust.jwk"}],"tpm2":{}}}'
@@ -112,10 +106,8 @@ function Clevis_Client_Test() {
             fi
 
             rlLogInfo "Binding Clevis with SSS config: ${SSS_CONFIG}"
-            # This command will now be fully non-interactive.
             rlRun "clevis luks bind -f -d ${LOOP_DEV} sss '${SSS_CONFIG}' <<< 'password'" 0 "Bind Clevis to LUKS device"
             
-            # ... The rest of the script remains the same ...
             rlLogInfo "Adding entry to /etc/crypttab for automatic unlock."
             grep -q "UUID=${LUKS_UUID}" /etc/crypttab || echo "${LUKS_DEV_NAME} UUID=${LUKS_UUID} none luks,clevis,nofail" >> /etc/crypttab
 
@@ -141,7 +133,6 @@ EOF_DRACUT_CONF
             rlRun "journalctl -b | grep 'Finished Cryptography Setup for ${LUKS_DEV_NAME}'" 0 "Verify journal for successful cryptsetup of our device"
             rlLogPass "Test passed: Clevis successfully unlocked the device during boot."
             
-            export SYNC_PROVIDER=${TANG_IP}
             rlRun "sync-set CLEVIS_TEST_DONE" 0 "Setting that Clevis part is done"
         rlPhaseEnd
 
@@ -162,12 +153,8 @@ EOF_DRACUT_CONF
 # --- Tang Server Logic ---
 function Tang_Server_Setup() {
     rlPhaseStartSetup "Tang Server: Setup"
+        rlRun "dnf install -y nmap-ncat" 0 "Install ncat for listener"
         rlRun "setenforce 0" 0 "Putting SELinux in Permissive mode for simplicity"
-        # rlRun "systemctl enable --now firewalld" 0 "Start and enable firewalld service"
-        # rlRun "firewall-cmd --add-port=${SYNC_GET_PORT}/tcp --permanent" 0 "Permanently open sync-get port"
-        # rlRun "firewall-cmd --add-port=${SYNC_SET_PORT}/tcp --permanent" 0 "Permanently open sync-set port"
-        # rlRun "firewall-cmd --add-service=http --permanent" 0 "Permanently open http for Tang"
-        # rlRun "firewall-cmd --reload" 0 "Reload firewall to apply permanent rules"
         
         rlRun "mkdir -p /var/db/tang" 0 "Ensure tang directory exists"
         rlRun "jose jwk gen -i '{\"alg\":\"ES512\"}' -o /var/db/tang/sig.jwk" 0 "Generate signature key"
@@ -178,8 +165,22 @@ function Tang_Server_Setup() {
 
         rlLog "Tang server setup complete. Signaling to client."
         rlRun "sync-set TANG_SETUP_DONE" 0 "Setting that Tang setup part is done"
-        rlRUn "sync-block CLEVIS_TEST_DONE" 0 "Waiting for the Clevis test"
+
+        # This "smart wait" loop keeps the server script alive until the client is done.
         rlLog "Server is now waiting for the client to signal it is finished..."
+        WAIT_TIMEOUT=900
+        while [[ $WAIT_TIMEOUT -gt 0 ]]; do
+            if grep -q "CLEVIS_TEST_DONE" "/var/tmp/sync-status"; then
+                rlLog "Client has signaled completion. Server can now exit."
+                break
+            fi
+            sleep 10
+            WAIT_TIMEOUT=$((WAIT_TIMEOUT - 10))
+        done
+
+        if [[ $WAIT_TIMEOUT -le 0 ]]; then
+            rlFail "Timed out waiting for the client to finish."
+        fi
     rlPhaseEnd
 }
 
