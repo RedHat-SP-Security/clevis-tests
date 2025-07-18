@@ -114,14 +114,29 @@ function Clevis_Client_Test() {
             rlLogInfo "Adding entry to /etc/crypttab for automatic unlock."
             grep -q "UUID=${LUKS_UUID}" /etc/crypttab || echo "${LUKS_DEV_NAME} UUID=${LUKS_UUID} none luks,clevis,nofail" >> /etc/crypttab
 
-            # 4. Add the advertisement file to the initramfs.
-            cat << EOF > /etc/dracut.conf.d/99-clevis-loop.conf
-install_items+=" ${PERSISTENT_LOOPFILE} /tmp/adv.jws "
-add_dracutmodules+=" network clevis "
-force_add_dracutmodules+=" network clevis "
-kernel_cmdline+=" rd.neednet=1 "
+            # 5. Create a systemd service to set up the loop device inside the initramfs
+            cat << 'EOF' > "${SETUP_LOOP_SERVICE}"
+[Unit]
+Description=Set up loop device for LUKS
+DefaultDependencies=no
+Before=cryptsetup.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/losetup -f --show /var/opt/loopfile
+
+[Install]
+WantedBy=cryptsetup.target
 EOF
 
+            # 6. Configure dracut to install all necessary files and services into the initramfs.
+            cat << EOF > /etc/dracut.conf.d/99-clevis-loop.conf
+install_items+=" ${PERSISTENT_LOOPFILE} /tmp/adv.jws ${SETUP_LOOP_SERVICE} "
+dracut_systemd_enable+=" setup-loop-for-luks.service "
+add_dracutmodules+=" network clevis systemd "
+kernel_cmdline+=" rd.neednet=1 "
+EOF
             rlRun "dracut --force --verbose" 0 "Regenerate initramfs"
             rlRun "touch '$COOKIE'"
             tmt-reboot
