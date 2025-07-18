@@ -32,8 +32,6 @@
 COOKIE="/var/opt/clevis_setup_done"
 PERSISTENT_LOOPFILE="/var/opt/loopfile"
 LUKS_DEV_NAME="myluksdev"
-SYNC_GET_PORT=2134
-SYNC_SET_PORT=2135
 
 # --- IP Assignment ---
 function get_IP() {
@@ -79,7 +77,7 @@ function Clevis_Client_Test() {
     if [ ! -f "$COOKIE" ]; then
         # === PRE-REBOOT: SETUP PHASE ===
         rlPhaseStartSetup "Clevis Client: Initial Setup"
-            # This logic is correct. It waits for the server.
+            rlRun "dnf install -y nmap-ncat jose-util" 0 "Install client helper packages"
             rlLog "Waiting for Tang server at ${TANG_IP} to be ready..."
             rlRun "sync-block TANG_SETUP_DONE ${TANG_IP}" 0 "Waiting for Tang setup part"
             rlLog "Tang server is ready. Proceeding with client setup."
@@ -94,7 +92,6 @@ function Clevis_Client_Test() {
             LUKS_UUID=$(cryptsetup luksUUID "${LOOP_DEV}")
             rlAssertNotEquals "LUKS UUID should not be empty" "" "${LUKS_UUID}"
 
-            # This block correctly automates trusting the Tang keys.
             rlLogInfo "Automating trust for Tang server keys..."
             rlRun "curl -sfgo /tmp/adv.jws http://${TANG_IP}/adv" 0 "Download advertisement"
             rlRun "jose jwk thp -i /tmp/adv.jws -o /tmp/trust.jwk" 0 "Extract signing keys for trust"
@@ -109,7 +106,7 @@ function Clevis_Client_Test() {
             fi
 
             rlLogInfo "Binding Clevis with SSS config: ${SSS_CONFIG}"
-            rlRun "yes | clevis luks bind -f -d ${LOOP_DEV} sss '${SSS_CONFIG}' <<< 'password'" 0 "Bind Clevis to LUKS device"
+            rlRun "clevis luks bind -f -d ${LOOP_DEV} sss '${SSS_CONFIG}' <<< 'password'" 0 "Bind Clevis to LUKS device"
             
             rlLogInfo "Adding entry to /etc/crypttab for automatic unlock."
             grep -q "UUID=${LUKS_UUID}" /etc/crypttab || echo "${LUKS_DEV_NAME} UUID=${LUKS_UUID} none luks,clevis,nofail" >> /etc/crypttab
@@ -136,7 +133,6 @@ EOF_DRACUT_CONF
             rlRun "journalctl -b | grep 'Finished Cryptography Setup for ${LUKS_DEV_NAME}'" 0 "Verify journal for successful cryptsetup of our device"
             rlLogPass "Test passed: Clevis successfully unlocked the device during boot."
             
-            export SYNC_PROVIDER=${TANG_IP}
             rlRun "sync-set CLEVIS_TEST_DONE" 0 "Setting that Clevis part is done"
         rlPhaseEnd
 
@@ -157,7 +153,7 @@ EOF_DRACUT_CONF
 # --- Tang Server Logic ---
 function Tang_Server_Setup() {
     rlPhaseStartSetup "Tang Server: Setup"
-        rlRun "dnf install -y nmap-ncat" 0 "Install ncat for listener"
+        rlRun "dnf install -y nmap-ncat jose-util tang" 0 "Install server packages"
         rlRun "setenforce 0" 0 "Putting SELinux in Permissive mode for simplicity"
         
         rlRun "mkdir -p /var/db/tang" 0 "Ensure tang directory exists"
@@ -169,8 +165,22 @@ function Tang_Server_Setup() {
 
         rlLog "Tang server setup complete. Signaling to client."
         rlRun "sync-set TANG_SETUP_DONE" 0 "Setting that Tang setup part is done"
-        rlRun "sync-block CLEVIS_TEST_DONE" 0 "Waiting for the Clevis test"
-        
+
+        # This "smart wait" loop keeps the server script alive until the client is done.
+        rlLog "Server is now waiting for the client to signal it is finished..."
+        WAIT_TIMEOUT=900
+        while [[ $WAIT_TIMEOUT -gt 0 ]]; do
+            if grep -q "CLEVIS_TEST_DONE" "/var/tmp/sync-status"; then
+                rlLog "Client has signaled completion. Server can now exit."
+                break
+            fi
+            sleep 10
+            WAIT_TIMEOUT=$((WAIT_TIMEOUT - 10))
+        done
+
+        if [[ $WAIT_TIMEOUT -le 0 ]]; then
+            rlFail "Timed out waiting for the client to finish."
+        fi
     rlPhaseEnd
 }
 
