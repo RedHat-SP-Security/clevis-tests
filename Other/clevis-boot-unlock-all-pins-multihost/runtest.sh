@@ -88,6 +88,7 @@ function Clevis_Client_Test() {
             LUKS_UUID=$(cryptsetup luksUUID "${LOOP_DEV}")
             rlAssertNotEquals "LUKS UUID should not be empty" "" "${LUKS_UUID}"
 
+            # 1. Download the advertisement to a file.
             rlRun "curl -sfgo /tmp/adv.jws http://${TANG_IP}/adv" 0 "Download Tang advertisement"
 
             # 2. Check for a TPM device.
@@ -99,20 +100,21 @@ function Clevis_Client_Test() {
             # 3. Bind using the simple "file path" method.
             if [ $TPM_PRESENT -eq 1 ]; then
                 rlLogInfo "TPM2 present. Binding with Tang and TPM2 (t=2)."
-                # The JSON is simple: it just points to the advertisement file.
                 SSS_CONFIG='{"t":2,"pins":{"tang":[{"url":"http://'"${TANG_IP}"'","adv":"/tmp/adv.jws"}],"tpm2":{}}}'
-                rlRun "echo -n 'password' | clevis luks bind -f -d \"${LOOP_DEV}\" sss '${SSS_CONFIG}'" 0 "Bind with TPM2 + Tang"
+                # ✅ FIX 1: Use a here-string '<<<' to pass the password, matching the working example.
+                rlRun "clevis luks bind -f -d \"${LOOP_DEV}\" sss '${SSS_CONFIG}'" 0 "Bind with TPM2 + Tang" <<< 'password'
             else
                 rlLogWarning "No TPM2 detected. Binding with Tang only (t=1)."
-                # The JSON is simple: it just points to the advertisement file.
                 SSS_CONFIG='{"t":1,"pins":{"tang":[{"url":"http://'"${TANG_IP}"'","adv":"/tmp/adv.jws"}]}}'
-                rlRun "echo -n 'password' | clevis luks bind -f -d \"${LOOP_DEV}\" sss '${SSS_CONFIG}'" 0 "Bind with Tang only"
+                # ✅ FIX 1: Use a here-string '<<<' to pass the password, matching the working example.
+                rlRun "clevis luks bind -f -d \"${LOOP_DEV}\" sss '${SSS_CONFIG}'" 0 "Bind with Tang only" <<< 'password'
             fi
-            # --- End of Corrected Logic ---
 
+            # ✅ FIX 2: Add the missing /etc/crypttab entry so the system knows to unlock the device at boot.
+            rlLogInfo "Adding entry to /etc/crypttab for automatic unlock."
+            grep -q "UUID=${LUKS_UUID}" /etc/crypttab || echo "${LUKS_DEV_NAME} UUID=${LUKS_UUID} none luks,clevis,nofail" >> /etc/crypttab
 
-            # 4. CRITICAL: Add the advertisement file to the initramfs.
-            #    Clevis needs this file at boot time to unlock the device.
+            # 4. Add the advertisement file to the initramfs.
             cat << EOF > /etc/dracut.conf.d/99-clevis-loop.conf
 install_items+=" ${PERSISTENT_LOOPFILE} /tmp/adv.jws "
 add_dracutmodules+=" network clevis "
