@@ -177,7 +177,20 @@ function Tang_Server_Setup() {
 
         rlLog "Tang server setup complete. Signaling to client."
         rlRun "sync-set TANG_SETUP_DONE" 0 "Setting that Tang setup part is done"
-        rlRun "sync-block CLEVIS_TEST_DONE ${TANG_IP}" 0 "Waiting for the clevis part"
+        rlLog "Server is now waiting for the client to signal it is finished..."
+        WAIT_TIMEOUT=900
+        while [[ $WAIT_TIMEOUT -gt 0 ]]; do
+            if grep -q "CLEVIS_TEST_DONE" "/var/tmp/sync-status"; then
+                rlLog "Client has signaled completion. Server can now exit."
+                break
+            fi
+            sleep 10
+            WAIT_TIMEOUT=$((WAIT_TIMEOUT - 10))
+        done
+
+        if [[ $WAIT_TIMEOUT -le 0 ]]; then
+            rlFail "Timed out waiting for the client to finish."
+        fi
     rlPhaseEnd
 }
 
