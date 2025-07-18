@@ -177,7 +177,7 @@ function Tang_Server_Setup() {
 
         rlLog "Tang server setup complete. Signaling to client."
         rlRun "sync-set TANG_SETUP_DONE" 0 "Setting that Tang setup part is done"
-        rlRun "sync-block CLEVIS_TEST_DONE" 0 "Waiting for the clevis part"
+        rlRun "sync-block CLEVIS_TEST_DONE ${TANG_IP}" 0 "Waiting for the clevis part"
     rlPhaseEnd
 }
 
