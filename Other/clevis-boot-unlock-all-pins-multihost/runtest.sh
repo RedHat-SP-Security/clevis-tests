@@ -34,6 +34,7 @@ PERSISTENT_LOOPFILE="/var/opt/loopfile"
 LUKS_DEV_NAME="myluksdev"
 SYNC_GET_PORT=2134
 SYNC_SET_PORT=2135
+SETUP_LOOP_SERVICE="/etc/systemd/system/setup-loop-for-luks.service"
 TANG_IP_FILE="/etc/clevis-test-data/tang_ip.txt"
 
 # --- IP Assignment ---
