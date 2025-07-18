@@ -102,16 +102,21 @@ function Clevis_Client_Test() {
                 TPM_PRESENT=1
             fi
 
+            # Bind Clevis using inline JSON config
             if [ $TPM_PRESENT -eq 1 ]; then
                 rlLogInfo "TPM2 present. Using SSS with Tang and TPM2 (t=2)."
-                SSS_CONFIG='{"t":2,"pins":{"tang":[{"url":"http://'"${TANG_IP}"'","trust_keys":"/tmp/trust.jwk"}],"tpm2":{}}}'
+                until clevis luks bind -f -d "${LOOP_DEV}" sss '{"t":2,"pins":{"tang":[{"url":"http://'"${TANG_IP}"'","trust_keys":"/tmp/trust.jwk"}],"tpm2":{}}}' <<< 'password'; do
+                    echo "Retrying clevis luks bind with TPM2..."
+                    sleep 1
+                done
             else
                 rlLogWarning "No TPM2 detected. Using Tang only (t=1)."
-                SSS_CONFIG='{"t":1,"pins":{"tang":[{"url":"http://'"${TANG_IP}"'","trust_keys":"/tmp/trust.jwk"}]}}'
+                until clevis luks bind -f -d "${LOOP_DEV}" sss '{"t":1,"pins":{"tang":[{"url":"http://'"${TANG_IP}"'","trust_keys":"/tmp/trust.jwk"}]}}' <<< 'password'; do
+                    echo "Retrying clevis luks bind with Tang only..."
+                    sleep 1
+                done
             fi
-            
-            echo "$SSS_CONFIG" > /tmp/sss.json
-            rlRun "echo -n 'password' | clevis luks bind -d ${LOOP_DEV} sss -f /tmp/sss.json" 0 "Bind Clevis to LUKS device"
+
             grep -q "UUID=${LUKS_UUID}" /etc/crypttab || echo "${LUKS_DEV_NAME} UUID=${LUKS_UUID} none luks,clevis,nofail" >> /etc/crypttab
 
             cat << EOF > /etc/dracut.conf.d/99-clevis-loop.conf
