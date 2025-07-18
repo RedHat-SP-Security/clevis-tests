@@ -109,7 +109,7 @@ function Clevis_Client_Test() {
             fi
 
             rlLogInfo "Binding Clevis with SSS config: ${SSS_CONFIG}"
-            rlRun "clevis luks bind -f -d ${LOOP_DEV} sss '${SSS_CONFIG}' <<< 'password'" 0 "Bind Clevis to LUKS device (no prompt expected)"
+            rlRun "echo -n password | clevis luks bind -f -k - -d ${LOOP_DEV} sss ${SSS_CONFIG}"
             
             rlLogInfo "Adding entry to /etc/crypttab for automatic unlock."
             grep -q "UUID=${LUKS_UUID}" /etc/crypttab || echo "${LUKS_DEV_NAME} UUID=${LUKS_UUID} none luks,clevis,nofail" >> /etc/crypttab
