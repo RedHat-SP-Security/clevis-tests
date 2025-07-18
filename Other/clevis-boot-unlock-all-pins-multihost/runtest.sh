@@ -110,7 +110,7 @@ function Clevis_Client_Test() {
                 SSS_CONFIG='{"t":1,"pins":{"tang":[{"url":"http://'"${TANG_IP}"'","trust_keys":"/tmp/trust.jwk"}]}}'
             fi
 
-            echo -n 'password' | clevis luks bind -d "$LOOP_DEV" sss -f - <<<"$SSS_CONFIG"
+            rlRun "echo -n 'password' | clevis luks bind -d ${LOOP_DEV} sss -f '${SSS_CONFIG}'" "Bind Clevis to LUKS device"
 
             grep -q "UUID=${LUKS_UUID}" /etc/crypttab || echo "${LUKS_DEV_NAME} UUID=${LUKS_UUID} none luks,clevis,nofail" >> /etc/crypttab
 
@@ -131,7 +131,7 @@ EOF
             rlRun "cryptsetup status ${LUKS_DEV_NAME}" 0 "Verify LUKS device is unlocked"
             rlRun "journalctl -b | grep 'clevis-luks-askpass.service: Deactivated successfully.'" 0
             rlRun "journalctl -b | grep 'Finished Cryptography Setup for ${LUKS_DEV_NAME}'" 0
-            rlLogPass "LUKS device was unlocked via Clevis + Tang at boot."
+            rlLog "LUKS device was unlocked via Clevis + Tang at boot."
             export SYNC_PROVIDER=${TANG_IP}
             rlRun "sync-set CLEVIS_TEST_DONE"
         rlPhaseEnd
