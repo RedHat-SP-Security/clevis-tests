@@ -104,11 +104,11 @@ function Clevis_Client_Test() {
 
             # Bind Clevis using inline JSON config
             if [ $TPM_PRESENT -eq 1 ]; then
-                rlLogInfo "TPM2 present. Using SSS with Tang and TPM2 (t=2)."
-                rlRun "clevis luks bind -f -d "${LOOP_DEV}" sss '{"t":2,"pins":{"tang":[{"url":"http://'"${TANG_IP}"'","trust_keys":"/tmp/trust.jwk"}],"tpm2":{}}}'" <<< 'password'
+            rlLogInfo "TPM2 present. Using SSS with Tang and TPM2 (t=2)."
+            rlRun "clevis luks bind -f -d \"${LOOP_DEV}\" sss '{\"t\":2,\"pins\":{\"tang\":[{\"url\":\"http://${TANG_IP}\",\"trust_keys\":\"/tmp/trust.jwk\"}],\"tpm2\":{}}}'" <<< 'password'
             else
-                rlLogWarning "No TPM2 detected. Using Tang only (t=1)."
-                rlRun "clevis luks bind -f -d "${LOOP_DEV}" sss '{"t":1,"pins":{"tang":[{"url":"http://'"${TANG_IP}"'","trust_keys":"/tmp/trust.jwk"}]}}'" <<< 'password'
+            rlLogWarning "No TPM2 detected. Using Tang only (t=1)."
+            rlRun "clevis luks bind -f -d \"${LOOP_DEV}\" sss '{\"t\":1,\"pins\":{\"tang\":[{\"url\":\"http://${TANG_IP}\",\"trust_keys\":\"/tmp/trust.jwk\"}]}}'" <<< 'password'
             fi
 
             grep -q "UUID=${LUKS_UUID}" /etc/crypttab || echo "${LUKS_DEV_NAME} UUID=${LUKS_UUID} none luks,clevis,nofail" >> /etc/crypttab
