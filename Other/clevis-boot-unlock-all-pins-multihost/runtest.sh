@@ -81,7 +81,7 @@ function Clevis_Client_Test() {
             rlRun "mkdir -p /var/opt /etc/clevis-test-data"
             echo "$TANG_IP" > "$TANG_IP_FILE"
 
-            rlRun "dd if=/dev/zero of=${PERSISTENT_LOOPFILE} bs=1M count=100" 0 "Create 100MB loopfile"
+            rlRun "dd if=/dev/zero of=${PERSISTENT_LOOPFILE} bs=1M count=256" 0 "Create 100MB loopfile"
             LOOP_DEV=$(losetup -f --show "${PERSISTENT_LOOPFILE}")
             rlAssertNotEquals "Loop device should be created" "" "$LOOP_DEV"
 
