@@ -115,11 +115,14 @@ function Clevis_Client_Test() {
             # Enable the systemd path for boot-time unlocking
             rlRun "systemctl enable clevis-luks-askpass.path" 0 "Enable clevis-luks-askpass.path"
 
-            # Configure dracut to include networking and clevis, and force DHCP
-            rlLogInfo "Configuring dracut for network-bound unlock"
-            rlRun "echo 'add_dracutmodules+=" clevis network "' > /etc/dracut.conf.d/99-clevis-network.conf" 0
-            # Add ip=dhcp to ensure the network is configured in the initramfs
-            rlRun "echo 'kernel_cmdline+=" rd.neednet=1 ip=dhcp rd.net.timeout.dhcp=30 rd.net.retry=5 "' >> /etc/dracut.conf.d/99-clevis-network.conf" 0
+            # Configure dracut using a robust method to avoid quote errors
+            rlLogInfo "Configuring dracut for a resilient network-bound unlock"
+            # Use tee with a here-string to safely write the configuration
+            rlRun "tee /etc/dracut.conf.d/99-clevis-network.conf > /dev/null" \
+                <<< 'add_dracutmodules+=" clevis network "'
+            rlRun "tee -a /etc/dracut.conf.d/99-clevis-network.conf > /dev/null" \
+                <<< 'kernel_cmdline+=" rd.neednet=1 ip=dhcp rd.net.timeout.dhcp=30 rd.net.retry=5 "'
+            
             rlRun "dracut -f --regenerate-all" 0 "Regenerate initramfs"
 
             # Create cookie and reboot
@@ -145,6 +148,7 @@ function Clevis_Client_Test() {
             if ! $unlocked; then
                 rlFail "Device ${LUKS_DEV_NAME} did not become active after waiting."
             fi
+            
             rlRun "lsblk" 0 "Display block devices"
             # Verify the device is active and mapped
             rlRun "cryptsetup status ${LUKS_DEV_NAME}" 0 "Verify LUKS device is unlocked"
@@ -203,7 +207,6 @@ function Tang_Server_Cleanup() {
         rlRun "firewall-cmd --reload"
     rlPhaseEnd
 }
-
 
 # --- Main Execution ---
 rlJournalStart
