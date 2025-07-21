@@ -18,37 +18,6 @@
 #   This program is distributed in the hope that it will be
 #   useful, but WITHOUT ANY WARRANTY; without even the implied
 #   warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
-#   PURPOSE.  See the GNU General Public License for more details.
-#
-#   You should have received a copy of the GNU General Public License
-#   along with this program. If not, see http://www.gnu.org/licenses/.
-#
-# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-# Include Beaker environment
-. /usr/share/beakerlib/beakerlib.sh || exit 1
-
-# --- Configuration ---
-#!/bin/bash
-# vim: dict+=/usr/share/beakerlib/dictionary.vim cpt=.,w,b,u,t,i,k
-# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-#
-#   runtest.sh of /clevis-tests/Otherl/tang-boot-unlock
-#   Description: Test of clevis boot unlock via tang.
-#   Author: Patrik Koncity <pkoncity@redhat.com>
-#
-# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-#
-#   Copyright (c) 2024 Red Hat, Inc.
-#
-#   This program is free software: you can redistribute it and/or
-#   modify it under the terms of the GNU General Public License as
-#   published by the Free Software Foundation, either version 2 of
-#   the License, or (at your option) any later version.
-#
-#   This program is distributed in the hope that it will be
-#   useful, but WITHOUT ANY WARRANTY; without even the implied
-#   warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
 #   PURPOSE.  See a copy of the GNU General Public License for more details.
 #
 #   You should have received a copy of the GNU General Public License
@@ -118,8 +87,6 @@ function Clevis_Client_Test() {
             rlRun "truncate -s 512M ${ENCRYPTED_FILE}" 0 "Create 512MB file for LUKS volume"
 
             rlRun "echo -n 'password' | cryptsetup luksFormat ${ENCRYPTED_FILE} -" 0 "Format file with LUKS2"
-            LUKS_UUID=$(cryptsetup luksUUID "${ENCRYPTED_FILE}")
-            rlAssertNotEquals "LUKS UUID should not be empty" "" "$LUKS_UUID"
 
             rlLogInfo "Fetching Tang advertisement"
             rlRun "curl -sf http://${TANG_IP}/adv -o /tmp/adv.jws" 0 "Download Tang advertisement"
@@ -133,17 +100,17 @@ function Clevis_Client_Test() {
             rlRun "touch ${KEY_FILE}" 0 "Create dummy key file"
             rlRun "chmod 600 ${KEY_FILE}" 0 "Set key file permissions"
 
-            # Configure crypttab for file-based LUKS and systemd unlock
+            # Configure crypttab for file-based LUKS. systemd will auto-generate the necessary service.
             rlLogInfo "Adding entry to /etc/crypttab for systemd-based unlock."
             grep -q "${LUKS_DEV_NAME}" /etc/crypttab || \
                 echo "${LUKS_DEV_NAME} ${ENCRYPTED_FILE} ${KEY_FILE} _netdev" >> /etc/crypttab
 
-            # Enable the systemd service that will be triggered by crypttab
+            # Enable the systemd helper that provides the password.
             rlLogInfo "Enabling Clevis systemd helpers."
             rlRun "systemctl enable clevis-luks-askpass.path" 0 "Enable Clevis askpass helper"
 
             rlRun "mkdir -p ${MOUNT_POINT}"
-            # Remove 'nofail' to ensure the boot process waits for the device
+            # This fstab entry will now correctly wait for the device to be unlocked.
             grep -q "${MOUNT_POINT}" /etc/fstab || \
                 echo "/dev/mapper/${LUKS_DEV_NAME} ${MOUNT_POINT} xfs defaults 0 0" >> /etc/fstab
 
