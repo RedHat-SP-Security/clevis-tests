@@ -85,7 +85,7 @@ function Clevis_Client_Test() {
 
             rlRun "mkdir -p /var/opt"
             rlRun "truncate -s 512M ${ENCRYPTED_FILE}" 0 "Create 512MB image file"
-
+            
             LOOP_DEV=$(losetup -f --show "${ENCRYPTED_FILE}")
             rlAssertNotEquals "Loop device setup failed" "" "$LOOP_DEV"
             rlLog "Image file ${ENCRYPTED_FILE} is now attached to ${LOOP_DEV}"
@@ -100,6 +100,12 @@ function Clevis_Client_Test() {
             SSS_CONFIG='{"t":1,"pins":{"tang":[{"url":"http://'"${TANG_IP}"'","adv":"/tmp/adv.jws"}]}}'
             rlLogInfo "Binding LUKS device ${LOOP_DEV} with SSS (Tang) pin"
             rlRun "clevis luks bind -f -d ${LOOP_DEV} sss '${SSS_CONFIG}'" 0 "Bind with SSS Tang pin" <<< 'password'
+
+            # Unlock, format, and then re-lock the device before configuring boot
+            rlLogInfo "Pre-formatting the LUKS volume"
+            rlRun "clevis luks unlock -d ${LOOP_DEV} -n ${LUKS_DEV_NAME}" 0 "Temporarily unlock for formatting"
+            rlRun "mkfs.xfs /dev/mapper/${LUKS_DEV_NAME}" 0 "Create filesystem"
+            rlRun "cryptsetup luksClose ${LUKS_DEV_NAME}" 0 "Re-lock the device"
 
             # Create a systemd service to set up the loop device very early at boot
             rlLogInfo "Creating a systemd service to set up loop device at boot"
@@ -126,7 +132,7 @@ EOF
             grep -q "UUID=${LUKS_UUID}" /etc/crypttab || \
                 echo "${LUKS_DEV_NAME} UUID=${LUKS_UUID} none _netdev" >> /etc/crypttab
 
-            # Add fstab entry with 'nofail' to prevent boot hangs if unlock fails
+            # Add fstab entry with 'nofail' to prevent boot hangs if unlock fails for any reason
             rlRun "mkdir -p ${MOUNT_POINT}"
             grep -q "${MOUNT_POINT}" /etc/fstab || \
                 echo "/dev/mapper/${LUKS_DEV_NAME} ${MOUNT_POINT} xfs defaults,nofail 0 0" >> /etc/fstab
@@ -161,9 +167,7 @@ EOF
                 rlFail "Device ${LUKS_DEV_NAME} was not automatically unlocked after waiting."
             fi
 
-            # Format the device now that it's unlocked, then mount.
-            rlLogInfo "Creating filesystem and mounting the unlocked device"
-            rlRun "mkfs.xfs /dev/mapper/${LUKS_DEV_NAME}" 0 "Create filesystem"
+            # The device is already unlocked, now we just mount it.
             rlRun "mount ${MOUNT_POINT}" 0 "Mount the device via fstab entry"
 
             rlRun "lsblk" 0 "Display block devices"
