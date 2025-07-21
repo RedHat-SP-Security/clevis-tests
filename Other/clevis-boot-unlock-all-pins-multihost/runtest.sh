@@ -81,18 +81,16 @@ function Clevis_Client_Test() {
             rlLog "Waiting for Tang server at ${TANG_IP} to be ready..."
             rlRun "sync-block TANG_SETUP_DONE ${TANG_IP}" 0 "Waiting for Tang setup part"
 
-            rlRun "yum install -y clevis-systemd" 0 "Install Clevis systemd components"
+            rlRun "yum install -y clevis-dracut clevis-systemd" 0 "Install Clevis boot/systemd components"
 
             rlRun "mkdir -p /var/opt"
             rlRun "truncate -s 512M ${ENCRYPTED_FILE}" 0 "Create 512MB file for LUKS volume"
-
             rlRun "echo -n 'password' | cryptsetup luksFormat ${ENCRYPTED_FILE} -" 0 "Format file with LUKS2"
 
             rlLogInfo "Fetching Tang advertisement"
             rlRun "curl -sf http://${TANG_IP}/adv -o /tmp/adv.jws" 0 "Download Tang advertisement"
 
             SSS_CONFIG='{"t":1,"pins":{"tang":[{"url":"http://'"${TANG_IP}"'","adv":"/tmp/adv.jws"}]}}'
-
             rlLogInfo "Binding LUKS device with SSS (Tang) pin"
             rlRun "clevis luks bind -f -d ${ENCRYPTED_FILE} sss '${SSS_CONFIG}'" 0 "Bind with SSS Tang pin" <<< 'password'
 
@@ -100,19 +98,28 @@ function Clevis_Client_Test() {
             rlRun "touch ${KEY_FILE}" 0 "Create dummy key file"
             rlRun "chmod 600 ${KEY_FILE}" 0 "Set key file permissions"
 
-            # Configure crypttab for file-based LUKS. systemd will auto-generate the necessary service.
+            # Configure crypttab for file-based LUKS. The _netdev option is critical.
             rlLogInfo "Adding entry to /etc/crypttab for systemd-based unlock."
             grep -q "${LUKS_DEV_NAME}" /etc/crypttab || \
                 echo "${LUKS_DEV_NAME} ${ENCRYPTED_FILE} ${KEY_FILE} _netdev" >> /etc/crypttab
 
-            # Enable the systemd helper that provides the password.
+            # Enable the systemd helper that provides the password for crypttab devices.
             rlLogInfo "Enabling Clevis systemd helpers."
             rlRun "systemctl enable clevis-luks-askpass.path" 0 "Enable Clevis askpass helper"
 
+            # Add fstab entry which depends on the crypttab configuration.
             rlRun "mkdir -p ${MOUNT_POINT}"
-            # This fstab entry will now correctly wait for the device to be unlocked.
             grep -q "${MOUNT_POINT}" /etc/fstab || \
                 echo "/dev/mapper/${LUKS_DEV_NAME} ${MOUNT_POINT} xfs defaults 0 0" >> /etc/fstab
+
+            # CRITICAL: Even for systemd unlocks, the initramfs MUST have networking
+            # capabilities for the _netdev option to work reliably.
+            rlLogInfo "Configuring dracut to ensure network is available for systemd"
+            rlRun "tee /etc/dracut.conf.d/99-clevis-network.conf > /dev/null" \
+                <<< 'add_dracutmodules+=" network "'
+            rlRun "tee -a /etc/dracut.conf.d/99-clevis-network.conf > /dev/null" \
+                <<< 'kernel_cmdline+=" rd.neednet=1 ip=dhcp "'
+            rlRun "dracut -f --regenerate-all" 0 "Regenerate initramfs"
 
             rlRun "touch '$COOKIE'"
             tmt-reboot
@@ -120,11 +127,10 @@ function Clevis_Client_Test() {
     else
         # === POST-REBOOT: VERIFICATION PHASE ===
         rlPhaseStartTest "Clevis Client: Verify Auto-Unlock"
-            # The system should wait for the device, but we'll keep a short loop for stability.
             local unlocked=false
-            for i in $(seq 1 10); do
-                rlLog "Attempt $i/10: Checking if device is unlocked..."
-                if cryptsetup status ${LUKS_DEV_NAME} > /dev/null 2>&1; then
+            for i in $(seq 1 15); do
+                rlLog "Attempt $i/15: Checking if device is unlocked..."
+                if [ -e "/dev/mapper/${LUKS_DEV_NAME}" ] && cryptsetup status ${LUKS_DEV_NAME} > /dev/null 2>&1; then
                     rlLog "Device ${LUKS_DEV_NAME} is active."
                     unlocked=true
                     break
@@ -141,7 +147,6 @@ function Clevis_Client_Test() {
             rlRun "lsblk" 0 "Display block devices"
             rlRun "cryptsetup status ${LUKS_DEV_NAME}" 0 "Verify LUKS device is unlocked"
             rlRun "findmnt ${MOUNT_POINT}" 0 "Verify device is mounted"
-
             rlRun "journalctl -b | grep 'Finished Cryptography Setup for ${LUKS_DEV_NAME}'" 0 "Check for cryptsetup completion in journal"
 
             rlLog "LUKS device was unlocked via Clevis + Tang at boot."
@@ -152,7 +157,7 @@ function Clevis_Client_Test() {
         rlPhaseStartCleanup "Clevis Client: Cleanup"
             rlRun "umount ${MOUNT_POINT}" || rlLogInfo "Not mounted"
             rlRun "cryptsetup luksClose ${LUKS_DEV_NAME}" || rlLogInfo "Not open"
-            rlRun "rm -f '$COOKIE' '${ENCRYPTED_FILE}' '${KEY_FILE}' /tmp/adv.jws"
+            rlRun "rm -f '$COOKIE' '${ENCRYPTED_FILE}' '${KEY_FILE}' /etc/dracut.conf.d/99-clevis-network.conf /tmp/adv.jws"
             rlRun "sed -i \"/${LUKS_DEV_NAME}/d\" /etc/crypttab"
             rlRun "sed -i \"|${MOUNT_POINT}|d\" /etc/fstab"
             rlRun "rmdir ${MOUNT_POINT}"
@@ -191,6 +196,7 @@ function Tang_Server_Cleanup() {
         rlRun "firewall-cmd --reload"
     rlPhaseEnd
 }
+
 
 # --- Main Execution ---
 rlJournalStart
