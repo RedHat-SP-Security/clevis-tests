@@ -11,6 +11,7 @@ require+:
   - tang
   - curl
   - jose
+  - clevis-systemd
   - url: https://github.com/RedHat-SP-Security/keylime-tests.git
     name: /Library/sync
     type: library

@@ -3,8 +3,8 @@
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 #
 #   runtest.sh of /clevis-tests/Otherl/tang-boot-unlock
-#   Description: Test of clevis boot unlock via tang.
-#   Author: Patrik Koncity <pkoncity@redhat.com>
+#   Description: Multihost test of clevis boot unlock via tang.
+#   Author: Adam Prikryl <aprikryl@redhat.com>
 #
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 #
@@ -81,7 +81,7 @@ function Clevis_Client_Test() {
             rlLog "Waiting for Tang server at ${TANG_IP} to be ready..."
             rlRun "sync-block TANG_SETUP_DONE ${TANG_IP}" 0 "Waiting for Tang setup part"
 
-            rlRun "yum install -y clevis-dracut clevis-systemd" 0 "Install Clevis boot/systemd components"
+            #rlRun "yum install -y clevis-dracut clevis-systemd" 0 "Install Clevis boot/systemd components"
 
             rlRun "mkdir -p /var/opt"
             rlRun "truncate -s 512M ${ENCRYPTED_FILE}" 0 "Create 512MB image file"
