@@ -34,6 +34,7 @@ ENCRYPTED_FILE="/var/opt/encrypted-volume.img"
 LUKS_DEV_NAME="tang-unlocked-device"
 MOUNT_POINT="/mnt/tang-test"
 LOOP_SERVICE_NAME="setup-luks-loop.service"
+RAM_DISK_DEVICE="/dev/ram0"
 SYNC_GET_PORT=2134
 SYNC_SET_PORT=2135
 
@@ -75,72 +76,92 @@ function assign_roles() {
 
 # --- Clevis Client Logic ---
 function Clevis_Client_Test() {
+    # Detect if we are running in Image Mode (bootc/ostree)
+    if bootc status &>/dev/null; then
+        IMAGE_MODE=true
+        rlLog "Detected IMAGE MODE"
+    else
+        IMAGE_MODE=false
+        rlLog "Detected PACKAGE MODE"
+    fi
+
     if [ ! -f "$COOKIE" ]; then
         # === PRE-REBOOT: SETUP PHASE ===
         rlPhaseStartSetup "Clevis Client: Initial Setup"
             rlLog "Waiting for Tang server at ${TANG_IP} to be ready..."
             rlRun "sync-block TANG_SETUP_DONE ${TANG_IP}" 0 "Waiting for Tang setup part"
 
-            #rlRun "yum install -y clevis-dracut clevis-systemd" 0 "Install Clevis boot/systemd components"
+            if $IMAGE_MODE; then
+                # --- Image Mode: Use Loopback Device with systemd service ---
+                rlRun "mkdir -p /var/opt"
+                rlRun "truncate -s 512M ${ENCRYPTED_FILE}" 0 "Create 512MB image file"
+                
+                LOOP_DEV=$(losetup -f --show "${ENCRYPTED_FILE}")
+                rlAssertNotEquals "Loop device setup failed" "" "$LOOP_DEV"
+                rlLog "Image file ${ENCRYPTED_FILE} is now attached to ${LOOP_DEV}"
 
-            rlRun "mkdir -p /var/opt"
-            rlRun "truncate -s 512M ${ENCRYPTED_FILE}" 0 "Create 512MB image file"
+                rlRun "echo -n 'password' | cryptsetup luksFormat ${LOOP_DEV} -" 0 "Format loop device with LUKS2"
+                LUKS_UUID=$(cryptsetup luksUUID "${LOOP_DEV}")
+
+                rlRun "clevis luks unlock -d ${LOOP_DEV} -n ${LUKS_DEV_NAME}" 0 "Temp unlock"
+                rlRun "mkfs.xfs /dev/mapper/${LUKS_DEV_NAME}" 0 "Create filesystem"
+                rlRun "cryptsetup luksClose ${LUKS_DEV_NAME}" 0 "Re-lock device"
+
+            else
+                # --- Package Mode: Use RAM Disk ---
+                rlLog "Creating a RAM disk at ${RAM_DISK_DEVICE}"
+                rlRun "modprobe brd rd_nr=1 rd_size=524288" 0 "Create 512MB RAM disk"
+                rlAssertExists "${RAM_DISK_DEVICE}"
+                
+                rlRun "echo -n 'password' | cryptsetup luksFormat ${RAM_DISK_DEVICE} -" 0 "Format RAM disk with LUKS2"
+                LUKS_UUID=$(cryptsetup luksUUID "${RAM_DISK_DEVICE}")
+            fi
             
-            LOOP_DEV=$(losetup -f --show "${ENCRYPTED_FILE}")
-            rlAssertNotEquals "Loop device setup failed" "" "$LOOP_DEV"
-            rlLog "Image file ${ENCRYPTED_FILE} is now attached to ${LOOP_DEV}"
-
-            rlRun "echo -n 'password' | cryptsetup luksFormat ${LOOP_DEV} -" 0 "Format loop device with LUKS2"
-            LUKS_UUID=$(cryptsetup luksUUID "${LOOP_DEV}")
             rlAssertNotEquals "LUKS UUID should not be empty" "" "$LUKS_UUID"
-
             rlLogInfo "Fetching Tang advertisement"
             rlRun "curl -sf http://${TANG_IP}/adv -o /tmp/adv.jws" 0 "Download Tang advertisement"
 
+            DEVICE_TO_BIND=$([ "$IMAGE_MODE" = true ] && echo "$LOOP_DEV" || echo "$RAM_DISK_DEVICE")
             SSS_CONFIG='{"t":1,"pins":{"tang":[{"url":"http://'"${TANG_IP}"'","adv":"/tmp/adv.jws"}]}}'
-            rlLogInfo "Binding LUKS device ${LOOP_DEV} with SSS (Tang) pin"
-            rlRun "clevis luks bind -f -d ${LOOP_DEV} sss '${SSS_CONFIG}'" 0 "Bind with SSS Tang pin" <<< 'password'
+            rlLogInfo "Binding LUKS device ${DEVICE_TO_BIND} with SSS (Tang) pin"
+            rlRun "clevis luks bind -f -d ${DEVICE_TO_BIND} sss '${SSS_CONFIG}'" 0 "Bind with SSS Tang pin" <<< 'password'
 
-            # Unlock, format, and then re-lock the device before configuring boot
-            rlLogInfo "Pre-formatting the LUKS volume"
-            rlRun "clevis luks unlock -d ${LOOP_DEV} -n ${LUKS_DEV_NAME}" 0 "Temporarily unlock for formatting"
-            rlRun "mkfs.xfs /dev/mapper/${LUKS_DEV_NAME}" 0 "Create filesystem"
-            rlRun "cryptsetup luksClose ${LUKS_DEV_NAME}" 0 "Re-lock the device"
-
-            # Create a systemd service to set up the loop device very early at boot
-            rlLogInfo "Creating a systemd service to set up loop device at boot"
-            cat << EOF > /etc/systemd/system/${LOOP_SERVICE_NAME}
+            if $IMAGE_MODE; then
+                rlLogInfo "Creating a systemd service to set up loop device at boot"
+                cat << EOF > /etc/systemd/system/${LOOP_SERVICE_NAME}
 [Unit]
 Description=Setup loop device for LUKS test
 DefaultDependencies=no
 Before=local-fs-pre.target cryptsetup.target
 After=systemd-udev-settle.service
-
 [Service]
 Type=oneshot
 ExecStart=/sbin/losetup -f --show ${ENCRYPTED_FILE}
 RemainAfterExit=yes
-
 [Install]
 WantedBy=multi-user.target
 EOF
-            rlRun "systemctl daemon-reload"
-            rlRun "systemctl enable ${LOOP_SERVICE_NAME}"
+                rlRun "systemctl daemon-reload"
+                rlRun "systemctl enable ${LOOP_SERVICE_NAME}"
+            fi
 
-            # Configure crypttab to find the device by UUID. The _netdev option is critical.
+            rlLogInfo "Ensuring /etc/crypttab and /etc/fstab exist"
+            rlRun "touch /etc/crypttab /etc/fstab"
+            
             rlLogInfo "Adding entry to /etc/crypttab for initramfs-based unlock."
             grep -q "UUID=${LUKS_UUID}" /etc/crypttab || \
                 echo "${LUKS_DEV_NAME} UUID=${LUKS_UUID} none _netdev" >> /etc/crypttab
 
-            # Add fstab entry with 'nofail' to prevent boot hangs if unlock fails for any reason
             rlRun "mkdir -p ${MOUNT_POINT}"
             grep -q "${MOUNT_POINT}" /etc/fstab || \
                 echo "/dev/mapper/${LUKS_DEV_NAME} ${MOUNT_POINT} xfs defaults,nofail 0 0" >> /etc/fstab
 
-            # CRITICAL: Build an initramfs with Clevis and robust networking.
             rlLogInfo "Configuring dracut to add clevis and network support"
             echo 'add_dracutmodules+=" clevis network "' > /etc/dracut.conf.d/99-clevis.conf
             echo 'kernel_cmdline+=" rd.neednet=1 ip=dhcp "' >> /etc/dracut.conf.d/99-clevis.conf
+            if [ "$IMAGE_MODE" = "false" ]; then
+                echo 'add_drivers+=" brd "' >> /etc/dracut.conf.d/99-clevis.conf
+            fi
             rlRun "dracut -f --regenerate-all" 0 "Regenerate initramfs"
 
             rlRun "touch '$COOKIE'"
@@ -162,40 +183,45 @@ EOF
             done
 
             if ! $unlocked; then
-                rlRun "journalctl -b --no-pager -u 'systemd-cryptsetup@*.service'" 2 "Get cryptsetup service logs on failure"
-                rlRun "journalctl -b --no-pager -u ${LOOP_SERVICE_NAME}" 2 "Get loop setup service logs on failure"
+                rlRun "journalctl -b --no-pager" 2 "Get full boot journal on failure"
                 rlFail "Device ${LUKS_DEV_NAME} was not automatically unlocked after waiting."
             fi
+            
+            if [ "$IMAGE_MODE" = "false" ]; then
+                # Only format the RAM disk post-boot
+                rlLogInfo "Creating filesystem on the unlocked RAM disk"
+                rlRun "mkfs.xfs /dev/mapper/${LUKS_DEV_NAME}" 0 "Create filesystem"
+            fi
 
-            # The device is already unlocked, now we just mount it.
             rlRun "mount ${MOUNT_POINT}" 0 "Mount the device via fstab entry"
 
             rlRun "lsblk" 0 "Display block devices"
             rlRun "findmnt ${MOUNT_POINT}" 0 "Verify device is mounted"
+            rlRun "journalctl -b | grep 'Finished Cryptography Setup for ${LUKS_DEV_NAME}'" 0 "Check for cryptsetup completion in journal"
+
             rlLog "LUKS device was unlocked via Clevis + Tang at boot."
             export SYNC_PROVIDER=${TANG_IP}
-            # Signal to the server that the test is done and cleanup can begin
             rlRun "sync-set CLEVIS_TEST_DONE"
         rlPhaseEnd
 
-        # === COORDINATED CLEANUP ===
         rlPhaseStartCleanup "Clevis Client: Cleanup"
-            # Wait for the server to signal it has finished its cleanup
-            rlRun "sync-block TANG_CLEANUP_DONE ${TANG_IP}" 0 "Wait for Tang server cleanup"
-
             rlRun "umount ${MOUNT_POINT}" || rlLogInfo "Not mounted"
             rlRun "cryptsetup luksClose ${LUKS_DEV_NAME}" || rlLogInfo "Not open"
-            LOOP_DEV=$(losetup -j "${ENCRYPTED_FILE}" | cut -d: -f1)
-            [ -n "$LOOP_DEV" ] && rlRun "losetup -d ${LOOP_DEV}" || rlLogInfo "Loop device not attached"
-            rlRun "systemctl disable ${LOOP_SERVICE_NAME}"
-            rlRun "rm -f '$COOKIE' '${ENCRYPTED_FILE}' /etc/dracut.conf.d/99-clevis.conf /etc/systemd/system/${LOOP_SERVICE_NAME} /tmp/adv.jws"
+
+            if $IMAGE_MODE; then
+                LOOP_DEV=$(losetup -j "${ENCRYPTED_FILE}" | cut -d: -f1)
+                [ -n "$LOOP_DEV" ] && rlRun "losetup -d ${LOOP_DEV}" || rlLogInfo "Loop device not attached"
+                rlRun "systemctl disable ${LOOP_SERVICE_NAME}"
+                rlRun "rm -f '${ENCRYPTED_FILE}' /etc/systemd/system/${LOOP_SERVICE_NAME}"
+            fi
+
+            rlRun "rm -f '$COOKIE' /etc/dracut.conf.d/99-clevis.conf /tmp/adv.jws"
             rlRun "sed -i \"/${LUKS_DEV_NAME}/d\" /etc/crypttab"
             rlRun "sed -i \"|${MOUNT_POINT}|d\" /etc/fstab"
             rlRun "rmdir ${MOUNT_POINT}"
             rlRun "dracut -f --regenerate-all" 0 "Regenerate initramfs to remove Clevis hook"
             
-            # Final signal that all operations are complete
-            rlRun "sync-set CLIENT_DONE"
+            rlRun "sync-set CLIENT_CLEANUP_DONE"
         rlPhaseEnd
     fi
 }
@@ -225,17 +251,13 @@ function Tang_Server_Setup() {
 function Tang_Server_Cleanup() {
     rlPhaseStartCleanup "Tang Server: Cleanup"
         rlLog "Server cleanup started."
+        pkill -f "ncat -l -k -p ${SYNC_SET_PORT}" || true
         rlRun "firewall-cmd --remove-port=${SYNC_GET_PORT}/tcp --permanent"
         rlRun "firewall-cmd --remove-port=${SYNC_SET_PORT}/tcp --permanent"
         rlRun "firewall-cmd --remove-service=http --permanent"
         rlRun "firewall-cmd --reload"
-
-        # Signal to the client that server cleanup is done
-        export SYNC_PROVIDER=${TANG_IP}
-        rlRun "sync-set TANG_CLEANUP_DONE"
         
-        # Wait for the client to finish its own cleanup
-        rlRun "sync-block CLIENT_DONE ${CLEVIS_IP}" 0 "Wait for Clevis client cleanup"
+        rlRun "sync-block CLIENT_CLEANUP_DONE ${CLEVIS_IP}" 0 "Wait for Clevis client cleanup"
         rlRun "sync-stop" 0 "Stop all synchronization daemons"
     rlPhaseEnd
 }
