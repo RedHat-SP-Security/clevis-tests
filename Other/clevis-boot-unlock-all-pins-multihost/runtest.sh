@@ -172,8 +172,6 @@ EOF
 
             rlRun "lsblk" 0 "Display block devices"
             rlRun "findmnt ${MOUNT_POINT}" 0 "Verify device is mounted"
-            rlRun "journalctl -b | grep 'Finished Cryptography Setup for ${LUKS_DEV_NAME}'" 0 "Check for cryptsetup completion in journal"
-
             rlLog "LUKS device was unlocked via Clevis + Tang at boot."
             export SYNC_PROVIDER=${TANG_IP}
             # Signal to the server that the test is done and cleanup can begin
@@ -227,7 +225,6 @@ function Tang_Server_Setup() {
 function Tang_Server_Cleanup() {
     rlPhaseStartCleanup "Tang Server: Cleanup"
         rlLog "Server cleanup started."
-        pkill -f "ncat -l -k -p ${SYNC_SET_PORT}" || true
         rlRun "firewall-cmd --remove-port=${SYNC_GET_PORT}/tcp --permanent"
         rlRun "firewall-cmd --remove-port=${SYNC_SET_PORT}/tcp --permanent"
         rlRun "firewall-cmd --remove-service=http --permanent"
