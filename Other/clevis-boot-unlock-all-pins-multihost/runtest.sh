@@ -81,6 +81,9 @@ function Clevis_Client_Test() {
             rlLog "Waiting for Tang server at ${TANG_IP} to be ready..."
             rlRun "sync-block TANG_SETUP_DONE ${TANG_IP}" 0 "Waiting for Tang setup part"
 
+            # Ensure necessary packages are installed for boot unlock
+            rlRun "yum install -y clevis-dracut" 0 "Install clevis-dracut package"
+
             rlRun "mkdir -p /var/opt"
             # Create a file to serve as our LUKS volume
             rlRun "truncate -s 512M ${ENCRYPTED_FILE}" 0 "Create 512MB file for LUKS volume"
@@ -90,15 +93,11 @@ function Clevis_Client_Test() {
             LUKS_UUID=$(cryptsetup luksUUID "${ENCRYPTED_FILE}")
             rlAssertNotEquals "LUKS UUID should not be empty" "" "$LUKS_UUID"
 
-            # Get Tang advertisement and configure trust
-            rlLogInfo "Fetching Tang advertisement and configuring trust"
+            # Get Tang advertisement
+            rlLogInfo "Fetching Tang advertisement"
             rlRun "curl -sf http://${TANG_IP}/adv -o /tmp/adv.jws" 0 "Download Tang advertisement"
-            # In a real-world scenario with TLS, you would add the CA to the trust store.
-            # For this HTTP test, the advertisement file is sufficient.
 
             # Define the SSS configuration with the Tang pin
-            # This uses Shamir's Secret Sharing to construct the pin.
-            # 't' is the threshold of pins needed, here it is 1.
             SSS_CONFIG='{"t":1,"pins":{"tang":[{"url":"http://'"${TANG_IP}"'","adv":"/tmp/adv.jws"}]}}'
 
             # Bind the device with the 'sss' pin
@@ -113,11 +112,14 @@ function Clevis_Client_Test() {
             rlRun "mkdir -p ${MOUNT_POINT}"
             grep -q "${MOUNT_POINT}" /etc/fstab || echo "/dev/mapper/${LUKS_DEV_NAME} ${MOUNT_POINT} xfs defaults 0 0" >> /etc/fstab
 
-            # Configure dracut to include networking and clevis
-            # This ensures the initramfs can reach the Tang server
+            # Enable the systemd path for boot-time unlocking
+            rlRun "systemctl enable clevis-luks-askpass.path" 0 "Enable clevis-luks-askpass.path"
+
+            # Configure dracut to include networking and clevis, and force DHCP
             rlLogInfo "Configuring dracut for network-bound unlock"
             echo 'add_dracutmodules+=" clevis network "' > /etc/dracut.conf.d/99-clevis-network.conf
-            echo 'kernel_cmdline+=" rd.neednet=1 "' >> /etc/dracut.conf.d/99-clevis-network.conf
+            # Add ip=dhcp to ensure the network is configured in the initramfs
+            echo 'kernel_cmdline+=" rd.neednet=1 ip=dhcp "' >> /etc/dracut.conf.d/99-clevis-network.conf
             rlRun "dracut -f --regenerate-all" 0 "Regenerate initramfs"
 
             # Create cookie and reboot
@@ -185,6 +187,7 @@ function Tang_Server_Cleanup() {
         rlRun "firewall-cmd --reload"
     rlPhaseEnd
 }
+
 
 # --- Main Execution ---
 rlJournalStart
