@@ -90,14 +90,20 @@ function Clevis_Client_Test() {
             LUKS_UUID=$(cryptsetup luksUUID "${ENCRYPTED_FILE}")
             rlAssertNotEquals "LUKS UUID should not be empty" "" "$LUKS_UUID"
 
-            # Get Tang advertisement
-            TANG_ADV=$(curl -sf http://"$TANG_IP"/adv)
-            rlAssertNotEquals "Tang advertisement should not be empty" "" "$TANG_ADV"
+            # Get Tang advertisement and configure trust
+            rlLogInfo "Fetching Tang advertisement and configuring trust"
+            rlRun "curl -sf http://${TANG_IP}/adv -o /tmp/adv.jws" 0 "Download Tang advertisement"
+            # In a real-world scenario with TLS, you would add the CA to the trust store.
+            # For this HTTP test, the advertisement file is sufficient.
 
-            # Bind the device directly with the 'tang' pin
-            # This is simpler and avoids the SSS header size issues
-            rlLogInfo "Binding LUKS device with Tang pin"
-            rlRun "clevis luks bind -f -d ${ENCRYPTED_FILE} tang '{\"url\":\"http://'"${TANG_IP}"'\"}'" 0 "Bind with Tang" <<< 'password'
+            # Define the SSS configuration with the Tang pin
+            # This uses Shamir's Secret Sharing to construct the pin.
+            # 't' is the threshold of pins needed, here it is 1.
+            SSS_CONFIG='{"t":1,"pins":{"tang":[{"url":"http://'"${TANG_IP}"'","adv":"/tmp/adv.jws"}]}}'
+
+            # Bind the device with the 'sss' pin
+            rlLogInfo "Binding LUKS device with SSS (Tang) pin"
+            rlRun "clevis luks bind -f -d ${ENCRYPTED_FILE} sss '${SSS_CONFIG}'" 0 "Bind with SSS Tang pin" <<< 'password'
 
             # Add entry to /etc/crypttab for automatic unlock at boot
             rlLogInfo "Adding entry to /etc/crypttab for automatic unlock."
@@ -139,7 +145,7 @@ function Clevis_Client_Test() {
         rlPhaseStartCleanup "Clevis Client: Cleanup"
             rlRun "umount ${MOUNT_POINT}" || rlLogInfo "Not mounted"
             rlRun "cryptsetup luksClose ${LUKS_DEV_NAME}" || rlLogInfo "Not open"
-            rlRun "rm -f '$COOKIE' '${ENCRYPTED_FILE}' /etc/dracut.conf.d/99-clevis-network.conf"
+            rlRun "rm -f '$COOKIE' '${ENCRYPTED_FILE}' /etc/dracut.conf.d/99-clevis-network.conf /tmp/adv.jws"
             rlRun "sed -i \"/${LUKS_UUID}/d\" /etc/crypttab"
             rlRun "sed -i \"|${MOUNT_POINT}|d\" /etc/fstab"
             rlRun "rmdir ${MOUNT_POINT}"
