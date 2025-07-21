@@ -172,13 +172,19 @@ EOF
 
             rlRun "lsblk" 0 "Display block devices"
             rlRun "findmnt ${MOUNT_POINT}" 0 "Verify device is mounted"
+            rlRun "journalctl -b | grep 'Finished Cryptography Setup for ${LUKS_DEV_NAME}'" 0 "Check for cryptsetup completion in journal"
 
             rlLog "LUKS device was unlocked via Clevis + Tang at boot."
             export SYNC_PROVIDER=${TANG_IP}
+            # Signal to the server that the test is done and cleanup can begin
             rlRun "sync-set CLEVIS_TEST_DONE"
         rlPhaseEnd
 
+        # === COORDINATED CLEANUP ===
         rlPhaseStartCleanup "Clevis Client: Cleanup"
+            # Wait for the server to signal it has finished its cleanup
+            rlRun "sync-block TANG_CLEANUP_DONE ${TANG_IP}" 0 "Wait for Tang server cleanup"
+
             rlRun "umount ${MOUNT_POINT}" || rlLogInfo "Not mounted"
             rlRun "cryptsetup luksClose ${LUKS_DEV_NAME}" || rlLogInfo "Not open"
             LOOP_DEV=$(losetup -j "${ENCRYPTED_FILE}" | cut -d: -f1)
@@ -189,6 +195,9 @@ EOF
             rlRun "sed -i \"|${MOUNT_POINT}|d\" /etc/fstab"
             rlRun "rmdir ${MOUNT_POINT}"
             rlRun "dracut -f --regenerate-all" 0 "Regenerate initramfs to remove Clevis hook"
+            
+            # Final signal that all operations are complete
+            rlRun "sync-set CLIENT_DONE"
         rlPhaseEnd
     fi
 }
@@ -210,21 +219,29 @@ function Tang_Server_Setup() {
         rlRun "systemctl status tangd.socket"
         rlRun "curl -sf http://${TANG_IP}/adv"
         rlRun "sync-set TANG_SETUP_DONE"
-        rlLog "Waiting for client to finish..."
-        rlRun "sync-block CLEVIS_TEST_DONE ${CLEVIS_IP}" 0 "Wait for Clevis"
+        rlLog "Waiting for client to finish its test..."
+        rlRun "sync-block CLEVIS_TEST_DONE ${CLEVIS_IP}" 0 "Wait for Clevis test completion"
     rlPhaseEnd
 }
 
 function Tang_Server_Cleanup() {
     rlPhaseStartCleanup "Tang Server: Cleanup"
+        rlLog "Server cleanup started."
         pkill -f "ncat -l -k -p ${SYNC_SET_PORT}" || true
         rlRun "firewall-cmd --remove-port=${SYNC_GET_PORT}/tcp --permanent"
         rlRun "firewall-cmd --remove-port=${SYNC_SET_PORT}/tcp --permanent"
         rlRun "firewall-cmd --remove-service=http --permanent"
         rlRun "firewall-cmd --reload"
+
+        # Signal to the client that server cleanup is done
+        export SYNC_PROVIDER=${TANG_IP}
+        rlRun "sync-set TANG_CLEANUP_DONE"
+        
+        # Wait for the client to finish its own cleanup
+        rlRun "sync-block CLIENT_DONE ${CLEVIS_IP}" 0 "Wait for Clevis client cleanup"
+        rlRun "sync-stop" 0 "Stop all synchronization daemons"
     rlPhaseEnd
 }
-
 
 # --- Main Execution ---
 rlJournalStart
