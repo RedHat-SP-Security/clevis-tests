@@ -30,9 +30,10 @@
 
 # --- Configuration ---
 COOKIE="/var/opt/clevis_setup_done"
-ENCRYPTED_FILE="/var/opt/encrypted-volume.luks"
+ENCRYPTED_FILE="/var/opt/encrypted-volume.img"
 LUKS_DEV_NAME="tang-unlocked-device"
 MOUNT_POINT="/mnt/tang-test"
+LOOP_SERVICE_NAME="setup-luks-loop.service"
 SYNC_GET_PORT=2134
 SYNC_SET_PORT=2135
 
@@ -83,27 +84,54 @@ function Clevis_Client_Test() {
             rlRun "yum install -y clevis-dracut clevis-systemd" 0 "Install Clevis boot/systemd components"
 
             rlRun "mkdir -p /var/opt"
-            rlRun "truncate -s 512M ${ENCRYPTED_FILE}" 0 "Create 512MB file for LUKS volume"
-            rlRun "echo -n 'password' | cryptsetup luksFormat ${ENCRYPTED_FILE} -" 0 "Format file with LUKS2"
+            rlRun "truncate -s 512M ${ENCRYPTED_FILE}" 0 "Create 512MB image file"
+
+            LOOP_DEV=$(losetup -f --show "${ENCRYPTED_FILE}")
+            rlAssertNotEquals "Loop device setup failed" "" "$LOOP_DEV"
+            rlLog "Image file ${ENCRYPTED_FILE} is now attached to ${LOOP_DEV}"
+
+            rlRun "echo -n 'password' | cryptsetup luksFormat ${LOOP_DEV} -" 0 "Format loop device with LUKS2"
+            LUKS_UUID=$(cryptsetup luksUUID "${LOOP_DEV}")
+            rlAssertNotEquals "LUKS UUID should not be empty" "" "$LUKS_UUID"
 
             rlLogInfo "Fetching Tang advertisement"
             rlRun "curl -sf http://${TANG_IP}/adv -o /tmp/adv.jws" 0 "Download Tang advertisement"
 
             SSS_CONFIG='{"t":1,"pins":{"tang":[{"url":"http://'"${TANG_IP}"'","adv":"/tmp/adv.jws"}]}}'
-            rlLogInfo "Binding LUKS device with SSS (Tang) pin"
-            rlRun "clevis luks bind -f -d ${ENCRYPTED_FILE} sss '${SSS_CONFIG}'" 0 "Bind with SSS Tang pin" <<< 'password'
+            rlLogInfo "Binding LUKS device ${LOOP_DEV} with SSS (Tang) pin"
+            rlRun "clevis luks bind -f -d ${LOOP_DEV} sss '${SSS_CONFIG}'" 0 "Bind with SSS Tang pin" <<< 'password'
 
-            # Configure crypttab to unlock the file-based device with the 'nofail' option to prevent boot hangs.
-            rlLogInfo "Adding entry to /etc/crypttab for boot-time unlock."
-            grep -q "${LUKS_DEV_NAME}" /etc/crypttab || \
-                echo "${LUKS_DEV_NAME} ${ENCRYPTED_FILE} none _netdev,nofail" >> /etc/crypttab
+            # Create a systemd service to set up the loop device very early at boot
+            rlLogInfo "Creating a systemd service to set up loop device at boot"
+            cat << EOF > /etc/systemd/system/${LOOP_SERVICE_NAME}
+[Unit]
+Description=Setup loop device for LUKS test
+DefaultDependencies=no
+Before=local-fs-pre.target cryptsetup.target
+After=systemd-udev-settle.service
 
-            # Add fstab entry which also uses 'nofail'.
+[Service]
+Type=oneshot
+ExecStart=/sbin/losetup -f --show ${ENCRYPTED_FILE}
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+EOF
+            rlRun "systemctl daemon-reload"
+            rlRun "systemctl enable ${LOOP_SERVICE_NAME}"
+
+            # Configure crypttab to find the device by UUID. The _netdev option is critical.
+            rlLogInfo "Adding entry to /etc/crypttab for initramfs-based unlock."
+            grep -q "UUID=${LUKS_UUID}" /etc/crypttab || \
+                echo "${LUKS_DEV_NAME} UUID=${LUKS_UUID} none _netdev" >> /etc/crypttab
+
+            # Add fstab entry with 'nofail' to prevent boot hangs if unlock fails
             rlRun "mkdir -p ${MOUNT_POINT}"
             grep -q "${MOUNT_POINT}" /etc/fstab || \
                 echo "/dev/mapper/${LUKS_DEV_NAME} ${MOUNT_POINT} xfs defaults,nofail 0 0" >> /etc/fstab
 
-            # CRITICAL: Force dracut to include Clevis and robust networking in the initramfs.
+            # CRITICAL: Build an initramfs with Clevis and robust networking.
             rlLogInfo "Configuring dracut to add clevis and network support"
             echo 'add_dracutmodules+=" clevis network "' > /etc/dracut.conf.d/99-clevis.conf
             echo 'kernel_cmdline+=" rd.neednet=1 ip=dhcp "' >> /etc/dracut.conf.d/99-clevis.conf
@@ -128,20 +156,21 @@ function Clevis_Client_Test() {
             done
 
             if ! $unlocked; then
-                rlRun "journalctl -b --no-pager" 2 "Get full boot journal on failure"
+                rlRun "journalctl -b --no-pager -u 'systemd-cryptsetup@*.service'" 2 "Get cryptsetup service logs on failure"
+                rlRun "journalctl -b --no-pager -u ${LOOP_SERVICE_NAME}" 2 "Get loop setup service logs on failure"
                 rlFail "Device ${LUKS_DEV_NAME} was not automatically unlocked after waiting."
             fi
 
-            # Format the device now that it's been auto-unlocked
-            rlLogInfo "Creating filesystem on the unlocked device"
+            # Format the device now that it's unlocked, then mount.
+            rlLogInfo "Creating filesystem and mounting the unlocked device"
             rlRun "mkfs.xfs /dev/mapper/${LUKS_DEV_NAME}" 0 "Create filesystem"
-            rlRun "mount /dev/mapper/${LUKS_DEV_NAME} ${MOUNT_POINT}" 0 "Mount the device"
+            rlRun "mount ${MOUNT_POINT}" 0 "Mount the device via fstab entry"
 
             rlRun "lsblk" 0 "Display block devices"
             rlRun "findmnt ${MOUNT_POINT}" 0 "Verify device is mounted"
             rlRun "journalctl -b | grep 'Finished Cryptography Setup for ${LUKS_DEV_NAME}'" 0 "Check for cryptsetup completion in journal"
 
-            rlLog "LUKS device was successfully unlocked automatically via Clevis + Tang at boot."
+            rlLog "LUKS device was unlocked via Clevis + Tang at boot."
             export SYNC_PROVIDER=${TANG_IP}
             rlRun "sync-set CLEVIS_TEST_DONE"
         rlPhaseEnd
@@ -149,10 +178,13 @@ function Clevis_Client_Test() {
         rlPhaseStartCleanup "Clevis Client: Cleanup"
             rlRun "umount ${MOUNT_POINT}" || rlLogInfo "Not mounted"
             rlRun "cryptsetup luksClose ${LUKS_DEV_NAME}" || rlLogInfo "Not open"
-            rlRun "rm -f '$COOKIE' '${ENCRYPTED_FILE}' /etc/dracut.conf.d/99-clevis.conf /tmp/adv.jws"
+            LOOP_DEV=$(losetup -j "${ENCRYPTED_FILE}" | cut -d: -f1)
+            [ -n "$LOOP_DEV" ] && rlRun "losetup -d ${LOOP_DEV}" || rlLogInfo "Loop device not attached"
+            rlRun "systemctl disable ${LOOP_SERVICE_NAME}"
+            rlRun "rm -f '$COOKIE' '${ENCRYPTED_FILE}' /etc/dracut.conf.d/99-clevis.conf /etc/systemd/system/${LOOP_SERVICE_NAME} /tmp/adv.jws"
             rlRun "sed -i \"/${LUKS_DEV_NAME}/d\" /etc/crypttab"
             rlRun "sed -i \"|${MOUNT_POINT}|d\" /etc/fstab"
-            rlRun "rmdir ${MOUNT_POINT}" || true
+            rlRun "rmdir ${MOUNT_POINT}"
             rlRun "dracut -f --regenerate-all" 0 "Regenerate initramfs to remove Clevis hook"
         rlPhaseEnd
     fi
@@ -189,7 +221,6 @@ function Tang_Server_Cleanup() {
         rlRun "firewall-cmd --reload"
     rlPhaseEnd
 }
-
 
 
 # --- Main Execution ---
