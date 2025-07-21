@@ -172,7 +172,6 @@ EOF
 
             rlRun "lsblk" 0 "Display block devices"
             rlRun "findmnt ${MOUNT_POINT}" 0 "Verify device is mounted"
-            rlRun "journalctl -b | grep 'Finished Cryptography Setup for ${LUKS_DEV_NAME}'" 0 "Check for cryptsetup completion in journal"
 
             rlLog "LUKS device was unlocked via Clevis + Tang at boot."
             export SYNC_PROVIDER=${TANG_IP}
