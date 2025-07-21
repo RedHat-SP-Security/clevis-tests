@@ -117,9 +117,9 @@ function Clevis_Client_Test() {
 
             # Configure dracut to include networking and clevis, and force DHCP
             rlLogInfo "Configuring dracut for network-bound unlock"
-            echo 'add_dracutmodules+=" clevis network "' > /etc/dracut.conf.d/99-clevis-network.conf
+            rlRun "echo 'add_dracutmodules+=" clevis network "' > /etc/dracut.conf.d/99-clevis-network.conf" 0
             # Add ip=dhcp to ensure the network is configured in the initramfs
-            echo 'kernel_cmdline+=" rd.neednet=1 ip=dhcp "' >> /etc/dracut.conf.d/99-clevis-network.conf
+            rlRun "echo 'kernel_cmdline+=" rd.neednet=1 ip=dhcp rd.net.timeout.dhcp=30 rd.net.retry=5 "' >> /etc/dracut.conf.d/99-clevis-network.conf" 0
             rlRun "dracut -f --regenerate-all" 0 "Regenerate initramfs"
 
             # Create cookie and reboot
@@ -129,6 +129,22 @@ function Clevis_Client_Test() {
     else
         # === POST-REBOOT: VERIFICATION PHASE ===
         rlPhaseStartTest "Clevis Client: Verify Auto-Unlock"
+            # Add a retry loop to give the system time to unlock the device over the network
+            local unlocked=false
+            for i in $(seq 1 10); do
+                rlLog "Attempt $i/10: Checking if device is unlocked..."
+                if cryptsetup status ${LUKS_DEV_NAME} > /dev/null 2>&1; then
+                    rlLog "Device ${LUKS_DEV_NAME} is active."
+                    unlocked=true
+                    break
+                fi
+                rlLog "Device not yet active. Waiting 6 seconds..."
+                sleep 6
+            done
+
+            if ! $unlocked; then
+                rlFail "Device ${LUKS_DEV_NAME} did not become active after waiting."
+            fi
             rlRun "lsblk" 0 "Display block devices"
             # Verify the device is active and mapped
             rlRun "cryptsetup status ${LUKS_DEV_NAME}" 0 "Verify LUKS device is unlocked"
