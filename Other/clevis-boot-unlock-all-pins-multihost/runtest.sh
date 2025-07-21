@@ -91,6 +91,11 @@ function Clevis_Client_Test() {
             rlLog "Waiting for Tang server at ${TANG_IP} to be ready..."
             rlRun "sync-block TANG_SETUP_DONE ${TANG_IP}" 0 "Waiting for Tang setup part"
 
+            # In Image Mode, packages are pre-installed via bootc_prepare_test
+            if ! $IMAGE_MODE; then
+                rlRun "yum install -y clevis-dracut clevis-systemd" 0 "Install Clevis components"
+            fi
+
             if $IMAGE_MODE; then
                 # --- Image Mode: Use Loopback Device with systemd service ---
                 rlRun "mkdir -p /var/opt"
@@ -102,11 +107,9 @@ function Clevis_Client_Test() {
 
                 rlRun "echo -n 'password' | cryptsetup luksFormat ${LOOP_DEV} -" 0 "Format loop device with LUKS2"
                 LUKS_UUID=$(cryptsetup luksUUID "${LOOP_DEV}")
-
-                rlRun "clevis luks unlock -d ${LOOP_DEV} -n ${LUKS_DEV_NAME}" 0 "Temp unlock"
-                rlRun "mkfs.xfs /dev/mapper/${LUKS_DEV_NAME}" 0 "Create filesystem"
-                rlRun "cryptsetup luksClose ${LUKS_DEV_NAME}" 0 "Re-lock device"
-
+                rlAssertNotEquals "LUKS UUID should not be empty" "" "$LUKS_UUID"
+                
+                DEVICE_TO_BIND="$LOOP_DEV"
             else
                 # --- Package Mode: Use RAM Disk ---
                 rlLog "Creating a RAM disk at ${RAM_DISK_DEVICE}"
@@ -115,17 +118,24 @@ function Clevis_Client_Test() {
                 
                 rlRun "echo -n 'password' | cryptsetup luksFormat ${RAM_DISK_DEVICE} -" 0 "Format RAM disk with LUKS2"
                 LUKS_UUID=$(cryptsetup luksUUID "${RAM_DISK_DEVICE}")
+                rlAssertNotEquals "LUKS UUID should not be empty" "" "$LUKS_UUID"
+
+                DEVICE_TO_BIND="$RAM_DISK_DEVICE"
             fi
             
-            rlAssertNotEquals "LUKS UUID should not be empty" "" "$LUKS_UUID"
             rlLogInfo "Fetching Tang advertisement"
             rlRun "curl -sf http://${TANG_IP}/adv -o /tmp/adv.jws" 0 "Download Tang advertisement"
 
-            DEVICE_TO_BIND=$([ "$IMAGE_MODE" = true ] && echo "$LOOP_DEV" || echo "$RAM_DISK_DEVICE")
             SSS_CONFIG='{"t":1,"pins":{"tang":[{"url":"http://'"${TANG_IP}"'","adv":"/tmp/adv.jws"}]}}'
             rlLogInfo "Binding LUKS device ${DEVICE_TO_BIND} with SSS (Tang) pin"
             rlRun "clevis luks bind -f -d ${DEVICE_TO_BIND} sss '${SSS_CONFIG}'" 0 "Bind with SSS Tang pin" <<< 'password'
 
+            # Unlock, format, and then re-lock the device before configuring boot
+            rlLogInfo "Pre-formatting the LUKS volume"
+            rlRun "clevis luks unlock -d ${DEVICE_TO_BIND} -n ${LUKS_DEV_NAME}" 0 "Temporarily unlock for formatting"
+            rlRun "mkfs.xfs /dev/mapper/${LUKS_DEV_NAME}" 0 "Create filesystem"
+            rlRun "cryptsetup luksClose ${LUKS_DEV_NAME}" 0 "Re-lock the device"
+            
             if $IMAGE_MODE; then
                 rlLogInfo "Creating a systemd service to set up loop device at boot"
                 cat << EOF > /etc/systemd/system/${LOOP_SERVICE_NAME}
@@ -187,12 +197,6 @@ EOF
                 rlFail "Device ${LUKS_DEV_NAME} was not automatically unlocked after waiting."
             fi
             
-            if [ "$IMAGE_MODE" = "false" ]; then
-                # Only format the RAM disk post-boot
-                rlLogInfo "Creating filesystem on the unlocked RAM disk"
-                rlRun "mkfs.xfs /dev/mapper/${LUKS_DEV_NAME}" 0 "Create filesystem"
-            fi
-
             rlRun "mount ${MOUNT_POINT}" 0 "Mount the device via fstab entry"
 
             rlRun "lsblk" 0 "Display block devices"
@@ -205,6 +209,8 @@ EOF
         rlPhaseEnd
 
         rlPhaseStartCleanup "Clevis Client: Cleanup"
+            rlRun "sync-block TANG_CLEANUP_DONE ${TANG_IP}" 0 "Wait for Tang server cleanup"
+            
             rlRun "umount ${MOUNT_POINT}" || rlLogInfo "Not mounted"
             rlRun "cryptsetup luksClose ${LUKS_DEV_NAME}" || rlLogInfo "Not open"
 
@@ -256,6 +262,9 @@ function Tang_Server_Cleanup() {
         rlRun "firewall-cmd --remove-port=${SYNC_SET_PORT}/tcp --permanent"
         rlRun "firewall-cmd --remove-service=http --permanent"
         rlRun "firewall-cmd --reload"
+        
+        export SYNC_PROVIDER=${TANG_IP}
+        rlRun "sync-set TANG_CLEANUP_DONE"
         
         rlRun "sync-block CLIENT_CLEANUP_DONE ${CLEVIS_IP}" 0 "Wait for Clevis client cleanup"
         rlRun "sync-stop" 0 "Stop all synchronization daemons"
