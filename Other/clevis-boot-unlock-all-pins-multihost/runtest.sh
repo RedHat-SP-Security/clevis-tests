@@ -93,7 +93,6 @@ function Clevis_Client_Test() {
                 rlLog "Image Mode - Phase 1: Installing packages"
                 rlRun "touch $COOKIE_INSTALL"
                 rlLog "Packages should be layered by bootc_prepare_test. Rebooting to apply."
-                tmt-reboot
             fi
             
             rlLog "Waiting for Tang server at ${TANG_IP} to be ready..."
@@ -228,6 +227,7 @@ function Tang_Server() {
         rlRun "systemctl enable --now tangd.socket"
         rlRun "systemctl status tangd.socket"
         rlRun "curl -sf http://${TANG_IP}/adv"
+        rlRun "sync-set TANG_SETUP_DONE" 0 "Tang setup of the server is done"
     rlPhaseEnd
     
     rlPhaseStartCleanup "Tang Server: Cleanup"
@@ -238,8 +238,6 @@ function Tang_Server() {
         rlRun "firewall-cmd --remove-port=${SYNC_SET_PORT}/tcp --permanent"
         rlRun "firewall-cmd --remove-service=http --permanent"
         rlRun "firewall-cmd --reload"
-
-        rlRun "sync-set TANG_CLEANUP_DONE" 0 "Tang cleanup is done"s
 
     rlPhaseEnd
 }
