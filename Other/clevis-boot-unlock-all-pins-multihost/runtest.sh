@@ -187,14 +187,12 @@ function Clevis_Client_Test() {
             
             rlLog "Clevis is correctly configured and functional for boot-time unlocking."
             export SYNC_PROVIDER=${TANG_IP}
-            rlRun "sync-set CLEVIS_TEST_DONE"
+
         rlPhaseEnd
 
         # === COORDINATED CLEANUP ===
         rlPhaseStartCleanup "Clevis Client: Cleanup"
-            # Wait for the server to signal it has finished its cleanup
-            rlRun "sync-block TANG_CLEANUP_DONE ${TANG_IP}" 0 "Wait for Tang server cleanup"
-            
+            rlRun "sync-set CLEVIS_TEST_DONE"
             rlRun "umount ${MOUNT_POINT}" || rlLogInfo "Not mounted"
             rlRun "cryptsetup luksClose ${LUKS_DEV_NAME}" || rlLogInfo "Not open"
 
@@ -230,21 +228,9 @@ function Tang_Server() {
         rlRun "systemctl enable --now tangd.socket"
         rlRun "systemctl status tangd.socket"
         rlRun "curl -sf http://${TANG_IP}/adv"
-        rlRun "sync-set TANG_SETUP_DONE"
     rlPhaseEnd
-
-    rlPhaseStartTest "Tang Server: Wait for Client"
-        rlLog "Waiting for Clevis test to finish..."
-        rlRun "sync-block CLEVIS_TEST_DONE ${CLEVIS_IP}" 0 "Wait for Clevis test completion"
-    rlPhaseEnd
-
+    
     rlPhaseStartCleanup "Tang Server: Cleanup"
-        rlLog "Server cleanup started."
-        
-        # Signal to client that Tang server is starting its cleanup
-        export SYNC_PROVIDER=${TANG_IP}
-
-        # Wait for client to finish its cleanup
         rlRun "sync-block CLIENT_CLEANUP_DONE ${CLEVIS_IP}" 0 "Wait for Clevis client cleanup"
 
         # Now, perform the actual cleanup
@@ -253,7 +239,7 @@ function Tang_Server() {
         rlRun "firewall-cmd --remove-service=http --permanent"
         rlRun "firewall-cmd --reload"
 
-        rlRun "sync-set TANG_CLEANUP_DONE" 0 "Tang cleanup is done"
+        rlRun "sync-set TANG_CLEANUP_DONE" 0 "Tang cleanup is done"s
 
     rlPhaseEnd
 }
