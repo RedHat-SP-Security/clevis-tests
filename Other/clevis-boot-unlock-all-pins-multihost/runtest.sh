@@ -235,16 +235,21 @@ function Tang_Server_Setup() {
 function Tang_Server_Cleanup() {
     rlPhaseStartCleanup "Tang Server: Cleanup"
         rlLog "Server cleanup started."
-        pkill -f "ncat -l -k -p ${SYNC_SET_PORT}" || true
+        
+        # Signal to the client that server cleanup can begin
+        export SYNC_PROVIDER=${TANG_IP}
+        rlRun "sync-set TANG_CLEANUP_DONE"
+        
+        # Wait for the client to confirm its cleanup is also done
+        rlRun "sync-block CLIENT_CLEANUP_DONE ${CLEVIS_IP}" 0 "Wait for Clevis client cleanup"
+        
+        # Now, perform the actual cleanup
         rlRun "firewall-cmd --remove-port=${SYNC_GET_PORT}/tcp --permanent"
         rlRun "firewall-cmd --remove-port=${SYNC_SET_PORT}/tcp --permanent"
         rlRun "firewall-cmd --remove-service=http --permanent"
         rlRun "firewall-cmd --reload"
         
-        export SYNC_PROVIDER=${TANG_IP}
-        rlRun "sync-set TANG_CLEANUP_DONE"
-        
-        rlRun "sync-block CLIENT_CLEANUP_DONE ${CLEVIS_IP}" 0 "Wait for Clevis client cleanup"
+        # Stop the synchronization daemons last
         rlRun "sync-stop" 0 "Stop all synchronization daemons"
     rlPhaseEnd
 }
