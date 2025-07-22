@@ -92,7 +92,7 @@ function Clevis_Client_Test() {
                 # --- Image Mode: First Boot - Just install packages ---
                 rlLog "Image Mode - Phase 1: Installing packages"
                 rlRun "touch $COOKIE_INSTALL"
-                rlLog "Packages layered. Rebooting to apply the new image deployment."
+                rlLog "Packages should be layered by bootc_prepare_test. Rebooting to apply."
                 tmt-reboot
             fi
             
@@ -124,10 +124,15 @@ function Clevis_Client_Test() {
             rlRun "clevis luks bind -f -d ${DEVICE_TO_ENCRYPT} sss '${SSS_CONFIG}'" 0 "Bind with SSS Tang pin" <<< 'password'
 
             # In IMAGE MODE, we do NOT configure crypttab/fstab to avoid boot deadlocks.
-            # We only build the initramfs and verify the capability post-reboot.
             if ! $IMAGE_MODE; then
                 LUKS_UUID=$(cryptsetup luksUUID "${DEVICE_TO_ENCRYPT}")
                 rlAssertNotEquals "LUKS UUID should not be empty" "" "$LUKS_UUID"
+                
+                rlLogInfo "Pre-formatting the LUKS volume"
+                rlRun "clevis luks unlock -d ${DEVICE_TO_ENCRYPT} -n ${LUKS_DEV_NAME}" 0 "Temporarily unlock for formatting"
+                rlRun "mkfs.xfs /dev/mapper/${LUKS_DEV_NAME}" 0 "Create filesystem"
+                rlRun "cryptsetup luksClose ${LUKS_DEV_NAME}" 0 "Re-lock the device"
+
                 rlLogInfo "Adding entry to /etc/crypttab for initramfs-based unlock."
                 grep -q "UUID=${LUKS_UUID}" /etc/crypttab || \
                     echo "${LUKS_DEV_NAME} UUID=${LUKS_UUID} none _netdev" >> /etc/crypttab
@@ -151,13 +156,10 @@ function Clevis_Client_Test() {
         # === POST-REBOOT: VERIFICATION PHASE ===
         rlPhaseStartTest "Clevis Client: Verify Unlock Capability"
             if $IMAGE_MODE; then
-                # In Image Mode, the boot succeeded because we didn't try to auto-unlock.
-                # We now prove the initramfs was built correctly by unlocking manually.
                 rlLogInfo "Image Mode: Verifying boot-time capability via manual unlock"
                 rlRun "journalctl -b | grep 'clevis-dracut'" 0 "Check for Clevis dracut hook in journal"
                 rlRun "clevis luks unlock -d ${ENCRYPTED_FILE} -n ${LUKS_DEV_NAME}" 0 "Verify Clevis can unlock the device post-boot"
             else
-                # In Package Mode, the device should have been unlocked automatically.
                 rlLogInfo "Package Mode: Verifying automatic unlock"
                 local unlocked=false
                 for i in $(seq 1 15); do
@@ -189,7 +191,9 @@ function Clevis_Client_Test() {
             rlRun "sync-set CLEVIS_TEST_DONE"
         rlPhaseEnd
 
+        # === COORDINATED CLEANUP ===
         rlPhaseStartCleanup "Clevis Client: Cleanup"
+            # Wait for the server to signal it has finished its cleanup
             rlRun "sync-block TANG_CLEANUP_DONE ${TANG_IP}" 0 "Wait for Tang server cleanup"
             
             rlRun "umount ${MOUNT_POINT}" || rlLogInfo "Not mounted"
@@ -205,6 +209,7 @@ function Clevis_Client_Test() {
             rlRun "rmdir ${MOUNT_POINT}"
             rlRun "dracut -f --regenerate-all" 0 "Regenerate initramfs to remove Clevis hook"
             
+            # Signal to the server that client cleanup is finished
             rlRun "sync-set CLIENT_CLEANUP_DONE"
         rlPhaseEnd
     fi
@@ -236,23 +241,24 @@ function Tang_Server_Cleanup() {
     rlPhaseStartCleanup "Tang Server: Cleanup"
         rlLog "Server cleanup started."
         
-        # Signal to the client that server cleanup can begin
-        export SYNC_PROVIDER=${TANG_IP}
-        rlRun "sync-set TANG_CLEANUP_DONE"
-        
-        # Wait for the client to confirm its cleanup is also done
-        rlRun "sync-block CLIENT_CLEANUP_DONE ${CLEVIS_IP}" 0 "Wait for Clevis client cleanup"
-        
         # Now, perform the actual cleanup
         rlRun "firewall-cmd --remove-port=${SYNC_GET_PORT}/tcp --permanent"
         rlRun "firewall-cmd --remove-port=${SYNC_SET_PORT}/tcp --permanent"
         rlRun "firewall-cmd --remove-service=http --permanent"
         rlRun "firewall-cmd --reload"
         
+        # Signal to the client that server cleanup is done
+        export SYNC_PROVIDER=${TANG_IP}
+        rlRun "sync-set TANG_CLEANUP_DONE"
+        
+        # Wait for the client to confirm its cleanup is also done
+        rlRun "sync-block CLIENT_CLEANUP_DONE ${CLEVIS_IP}" 0 "Wait for Clevis client cleanup"
+        
         # Stop the synchronization daemons last
         rlRun "sync-stop" 0 "Stop all synchronization daemons"
     rlPhaseEnd
 }
+
 
 # --- Main Execution ---
 rlJournalStart
