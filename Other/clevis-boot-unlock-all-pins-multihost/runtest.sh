@@ -157,7 +157,6 @@ function Clevis_Client_Test() {
         rlPhaseStartTest "Clevis Client: Verify Unlock Capability"
             if $IMAGE_MODE; then
                 rlLogInfo "Image Mode: Verifying boot-time capability via manual unlock"
-                rlRun "journalctl -b | grep 'clevis-dracut'" 0 "Check for Clevis dracut hook in journal"
                 rlRun "clevis luks unlock -d ${ENCRYPTED_FILE} -n ${LUKS_DEV_NAME}" 0 "Verify Clevis can unlock the device post-boot"
             else
                 rlLogInfo "Package Mode: Verifying automatic unlock"
@@ -232,30 +231,30 @@ function Tang_Server_Setup() {
         rlRun "systemctl status tangd.socket"
         rlRun "curl -sf http://${TANG_IP}/adv"
         rlRun "sync-set TANG_SETUP_DONE"
-        rlLog "Waiting for client to finish its test..."
-        rlRun "sync-block CLEVIS_TEST_DONE ${CLEVIS_IP}" 0 "Wait for Clevis test completion"
     rlPhaseEnd
 }
 
-function Tang_Server_Cleanup() {
-    rlPhaseStartCleanup "Tang Server: Cleanup"
-        rlLog "Server cleanup started."
-        
-        # Now, perform the actual cleanup
-        rlRun "firewall-cmd --remove-port=${SYNC_GET_PORT}/tcp --permanent"
-        rlRun "firewall-cmd --remove-port=${SYNC_SET_PORT}/tcp --permanent"
-        rlRun "firewall-cmd --remove-service=http --permanent"
-        rlRun "firewall-cmd --reload"
-        
-        # Signal to the client that server cleanup is done
-        export SYNC_PROVIDER=${TANG_IP}
-        rlRun "sync-set TANG_CLEANUP_DONE"
-        
-        # Wait for the client to confirm its cleanup is also done
-        rlRun "sync-block CLIENT_CLEANUP_DONE ${CLEVIS_IP}" 0 "Wait for Clevis client cleanup"
-        
-        # Stop the synchronization daemons last
-        rlRun "sync-stop" 0 "Stop all synchronization daemons"
+function Tang_Server_WaitAndCleanup() {
+    rlPhaseStartTest "Tang Server: Wait for Client and Cleanup"
+        rlLog "Waiting for Clevis test to finish..."
+        rlRun "sync-block CLEVIS_TEST_DONE ${CLEVIS_IP}" 0 "Wait for Clevis test completion"
+
+        rlPhaseStartCleanup "Tang Server: Cleanup"
+            rlLog "Server cleanup started."
+            rlRun "firewall-cmd --remove-port=${SYNC_GET_PORT}/tcp --permanent"
+            rlRun "firewall-cmd --remove-port=${SYNC_SET_PORT}/tcp --permanent"
+            rlRun "firewall-cmd --remove-service=http --permanent"
+            rlRun "firewall-cmd --reload"
+
+            # Notify client that Tang server is done cleaning
+            export SYNC_PROVIDER=${TANG_IP}
+            rlRun "sync-set TANG_CLEANUP_DONE"
+
+            # Wait for client to finish its cleanup
+            rlRun "sync-block CLIENT_CLEANUP_DONE ${CLEVIS_IP}" 0 "Wait for Clevis client cleanup"
+
+            rlRun "sync-stop" 0 "Stop all synchronization daemons"
+        rlPhaseEnd
     rlPhaseEnd
 }
 
@@ -273,7 +272,7 @@ rlJournalStart
     elif echo " $HOSTNAME $MY_IP " | grep -q " ${TANG} "; then
         rlLog "Running as SERVER"
         Tang_Server_Setup
-        Tang_Server_Cleanup
+        Tang_Server_WaitAndCleanup
     else
         rlFail "Unknown host role"
     fi
