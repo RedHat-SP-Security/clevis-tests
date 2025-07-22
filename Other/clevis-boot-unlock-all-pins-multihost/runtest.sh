@@ -87,8 +87,14 @@ function Clevis_Client_Test() {
 
     if [ ! -f "$COOKIE_CONFIG" ]; then
         # === PRE-REBOOT: SETUP PHASE ===
-        # This pre-reboot section is unchanged and correct.
         rlPhaseStartSetup "Clevis Client: Initial Setup"
+            # --- ADD THIS BLOCK TO CONFIGURE THE CLIENT'S FIREWALL ---
+            rlLogInfo "Configuring client firewall to allow status polling from server"
+            rlRun "systemctl enable --now firewalld"
+            rlRun "firewall-cmd --add-port=${SYNC_GET_PORT}/tcp --permanent"
+            rlRun "firewall-cmd --reload"
+            # --- END OF NEW BLOCK ---
+
             if $IMAGE_MODE && [ ! -f "$COOKIE_INSTALL" ]; then
                 rlLog "Image Mode - Phase 1: Installing packages"
                 rlRun "touch $COOKIE_INSTALL"
@@ -96,8 +102,7 @@ function Clevis_Client_Test() {
             fi
 
             rlLog "Waiting for Tang server at ${TANG_IP} to be ready..."
-            rlRun "sync-block TANG_SETUP_DONE ${TANG_IP}" 0 "Waiting for Tang setup part"
-
+            
             if ! $IMAGE_MODE; then
                 rlRun "yum install -y clevis-dracut clevis-systemd" 0 "Install Clevis components"
             fi
