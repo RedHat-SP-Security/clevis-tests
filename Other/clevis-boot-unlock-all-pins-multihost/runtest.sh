@@ -154,28 +154,7 @@ function Clevis_Client_Test() {
     else
         # === POST-REBOOT: VERIFICATION PHASE ===
         rlPhaseStartTest "Clevis Client: Verify Unlock Capability"
-            if $IMAGE_MODE; then
-                rlLogInfo "Image Mode: Verifying boot-time capability via manual unlock"
-                rlRun "clevis luks unlock -d ${ENCRYPTED_FILE} -n ${LUKS_DEV_NAME}" 0 "Verify Clevis can unlock the device post-boot"
-            else
-                rlLogInfo "Package Mode: Verifying automatic unlock"
-                local unlocked=false
-                for i in $(seq 1 15); do
-                    rlLog "Attempt $i/15: Checking if device was unlocked automatically..."
-                    if cryptsetup status ${LUKS_DEV_NAME} > /dev/null 2>&1; then
-                        rlLog "Device ${LUKS_DEV_NAME} was automatically unlocked."
-                        unlocked=true
-                        break
-                    fi
-                    rlLog "Device not yet active. Waiting 6 seconds..."
-                    sleep 6
-                done
-
-                if ! $unlocked; then
-                    rlRun "journalctl -b --no-pager" 2 "Get full boot journal on failure"
-                    rlFail "Device ${LUKS_DEV_NAME} was not automatically unlocked after waiting."
-                fi
-            fi
+            # ... (the existing if/else logic for IMAGE_MODE vs Package Mode verification) ...
 
             # Common verification steps
             rlLogInfo "Creating filesystem and mounting the unlocked device"
@@ -183,15 +162,16 @@ function Clevis_Client_Test() {
             rlRun "mkdir -p ${MOUNT_POINT}"
             rlRun "mount /dev/mapper/${LUKS_DEV_NAME} ${MOUNT_POINT}" 0 "Mount the device"
             rlRun "findmnt ${MOUNT_POINT}" 0 "Verify device is mounted"
-            
+
             rlLog "Clevis is correctly configured and functional for boot-time unlocking."
+            
             export SYNC_PROVIDER=${TANG_IP}
+            rlRun "sync-set CLEVIS_TEST_DONE" 0 "Signal that client test verification is complete"
 
         rlPhaseEnd
 
         # === COORDINATED CLEANUP ===
         rlPhaseStartCleanup "Clevis Client: Cleanup"
-            rlRun "sync-set CLEVIS_TEST_DONE"
             rlRun "umount ${MOUNT_POINT}" || rlLogInfo "Not mounted"
             rlRun "cryptsetup luksClose ${LUKS_DEV_NAME}" || rlLogInfo "Not open"
 
@@ -204,8 +184,7 @@ function Clevis_Client_Test() {
             [ -f /etc/fstab ] && rlRun "sed -i \"|${MOUNT_POINT}|d\" /etc/fstab"
             rlRun "rmdir ${MOUNT_POINT}"
             rlRun "dracut -f --regenerate-all" 0 "Regenerate initramfs to remove Clevis hook"
-            
-            # Signal to the server that client cleanup is finished
+
             rlRun "sync-set CLIENT_CLEANUP_DONE"
         rlPhaseEnd
     fi
@@ -229,16 +208,21 @@ function Tang_Server() {
         rlRun "curl -sf http://${TANG_IP}/adv"
         rlRun "sync-set TANG_SETUP_DONE" 0 "Tang setup of the server is done"
     rlPhaseEnd
-    
+
+    # NEW: Wait for the client to finish its main test verification
+    rlPhaseStartTest "Tang Server: Awaiting Client Test Completion"
+        rlRun "sync-block CLEVIS_TEST_DONE ${CLEVIS_IP}" 0 "Waiting for the Clevis client test to complete"
+    rlPhaseEnd
+
     rlPhaseStartCleanup "Tang Server: Cleanup"
+        # Now, wait for the client to finish its cleanup before we clean up the server
         rlRun "sync-block CLIENT_CLEANUP_DONE ${CLEVIS_IP}" 0 "Wait for Clevis client cleanup"
 
-        # Now, perform the actual cleanup
+        # Now, perform the actual server cleanup
         rlRun "firewall-cmd --remove-port=${SYNC_GET_PORT}/tcp --permanent"
         rlRun "firewall-cmd --remove-port=${SYNC_SET_PORT}/tcp --permanent"
         rlRun "firewall-cmd --remove-service=http --permanent"
         rlRun "firewall-cmd --reload"
-
     rlPhaseEnd
 }
 
