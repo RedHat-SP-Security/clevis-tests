@@ -233,6 +233,7 @@ function Tang_Server() {
         rlRun "firewall-cmd --remove-port=${SYNC_SET_PORT}/tcp --permanent"
         rlRun "firewall-cmd --remove-service=http --permanent"
         rlRun "firewall-cmd --reload"
+        rlRun "setenforce 1" 0 "Restore SELinux permissive settings"
     rlPhaseEnd
 }
 
