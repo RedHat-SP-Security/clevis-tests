@@ -150,9 +150,8 @@ function Clevis_Client_Test() {
             tmt-reboot
         rlPhaseEnd
     else
-        # === POST-REBOOT: VERIFICATION PHASE (CORRECTED) ===
+        # === POST-REBOOT: VERIFICATION PHASE (WITH WORKAROUND) ===
         rlPhaseStartTest "Clevis Client: Verify Unlock Capability"
-            # RESTORED: This block performs the unlock/verification. It was missing before.
             if $IMAGE_MODE; then
                 rlLogInfo "Image Mode: Verifying boot-time capability via manual unlock"
                 rlRun "clevis luks unlock -d ${ENCRYPTED_FILE} -n ${LUKS_DEV_NAME}" 0 "Verify Clevis can unlock the device post-boot"
@@ -176,7 +175,7 @@ function Clevis_Client_Test() {
                 fi
             fi
 
-            # Common verification steps that follow the unlock
+            # Common verification steps
             rlLogInfo "Creating filesystem and mounting the unlocked device"
             rlRun "mkfs.xfs /dev/mapper/${LUKS_DEV_NAME}" 0 "Create filesystem"
             rlRun "mkdir -p ${MOUNT_POINT}"
@@ -184,16 +183,16 @@ function Clevis_Client_Test() {
             rlRun "findmnt ${MOUNT_POINT}" 0 "Verify device is mounted"
 
             rlLog "Clevis is correctly configured and functional for boot-time unlocking."
-            export SYNC_PROVIDER=${TANG_IP}
 
-            # Signal test completion AFTER successful verification
-            rlRun "sync-set CLEVIS_TEST_DONE" 0 "Signal that client test verification is complete"
+            # --- WORKAROUND APPLIED HERE ---
+            # Force sync-set to write locally. The server will poll this client for the status.
+            unset SYNC_PROVIDER
+            rlRun "sync-set CLEVIS_TEST_DONE" 0 "Create local status file for server to poll"
 
         rlPhaseEnd
 
-        # === COORDINATED CLEANUP (CORRECTED) ===
+        # === COORDINATED CLEANUP (WITH WORKAROUND) ===
         rlPhaseStartCleanup "Clevis Client: Cleanup"
-            # Perform all local cleanup actions first
             rlRun "umount ${MOUNT_POINT}" || rlLogInfo "Not mounted"
             rlRun "cryptsetup luksClose ${LUKS_DEV_NAME}" || rlLogInfo "Not open"
 
@@ -207,7 +206,9 @@ function Clevis_Client_Test() {
             rlRun "rmdir ${MOUNT_POINT}"
             rlRun "dracut -f --regenerate-all" 0 "Regenerate initramfs to remove Clevis hook"
 
-            # CORRECTED: Signal to the server that client cleanup is finished at the VERY END.
+            # --- WORKAROUND APPLIED HERE ---
+            # Write final status locally for the server to poll.
+            unset SYNC_PROVIDER
             rlRun "sync-set CLIENT_CLEANUP_DONE"
         rlPhaseEnd
     fi
