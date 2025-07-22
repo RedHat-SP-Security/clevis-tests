@@ -91,8 +91,6 @@ function Clevis_Client_Test() {
             if $IMAGE_MODE && [ ! -f "$COOKIE_INSTALL" ]; then
                 # --- Image Mode: First Boot - Just install packages ---
                 rlLog "Image Mode - Phase 1: Installing packages"
-                # Use --allow-inactive in case packages are already present in the base image
-                rlRun "rpm-ostree install --allow-inactive clevis-dracut clevis-systemd"
                 rlRun "touch $COOKIE_INSTALL"
                 rlLog "Packages layered. Rebooting to apply the new image deployment."
                 tmt-reboot
