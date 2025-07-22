@@ -87,22 +87,21 @@ function Clevis_Client_Test() {
 
     if [ ! -f "$COOKIE_CONFIG" ]; then
         # === PRE-REBOOT: SETUP PHASE ===
+        # This pre-reboot section is unchanged and correct.
         rlPhaseStartSetup "Clevis Client: Initial Setup"
             if $IMAGE_MODE && [ ! -f "$COOKIE_INSTALL" ]; then
-                # --- Image Mode: First Boot - Just install packages ---
                 rlLog "Image Mode - Phase 1: Installing packages"
                 rlRun "touch $COOKIE_INSTALL"
                 rlLog "Packages should be layered by bootc_prepare_test. Rebooting to apply."
             fi
-            
+
             rlLog "Waiting for Tang server at ${TANG_IP} to be ready..."
             rlRun "sync-block TANG_SETUP_DONE ${TANG_IP}" 0 "Waiting for Tang setup part"
 
             if ! $IMAGE_MODE; then
                 rlRun "yum install -y clevis-dracut clevis-systemd" 0 "Install Clevis components"
             fi
-            
-            # Create and encrypt the device
+
             if $IMAGE_MODE; then
                 rlRun "mkdir -p /var/opt"
                 rlRun "truncate -s 512M ${ENCRYPTED_FILE}" 0 "Create 512MB image file"
@@ -122,11 +121,10 @@ function Clevis_Client_Test() {
             rlLogInfo "Binding LUKS device with SSS (Tang) pin"
             rlRun "clevis luks bind -f -d ${DEVICE_TO_ENCRYPT} sss '${SSS_CONFIG}'" 0 "Bind with SSS Tang pin" <<< 'password'
 
-            # In IMAGE MODE, we do NOT configure crypttab/fstab to avoid boot deadlocks.
             if ! $IMAGE_MODE; then
                 LUKS_UUID=$(cryptsetup luksUUID "${DEVICE_TO_ENCRYPT}")
                 rlAssertNotEquals "LUKS UUID should not be empty" "" "$LUKS_UUID"
-                
+
                 rlLogInfo "Pre-formatting the LUKS volume"
                 rlRun "clevis luks unlock -d ${DEVICE_TO_ENCRYPT} -n ${LUKS_DEV_NAME}" 0 "Temporarily unlock for formatting"
                 rlRun "mkfs.xfs /dev/mapper/${LUKS_DEV_NAME}" 0 "Create filesystem"
@@ -152,11 +150,33 @@ function Clevis_Client_Test() {
             tmt-reboot
         rlPhaseEnd
     else
-        # === POST-REBOOT: VERIFICATION PHASE ===
+        # === POST-REBOOT: VERIFICATION PHASE (CORRECTED) ===
         rlPhaseStartTest "Clevis Client: Verify Unlock Capability"
-            # ... (the existing if/else logic for IMAGE_MODE vs Package Mode verification) ...
+            # RESTORED: This block performs the unlock/verification. It was missing before.
+            if $IMAGE_MODE; then
+                rlLogInfo "Image Mode: Verifying boot-time capability via manual unlock"
+                rlRun "clevis luks unlock -d ${ENCRYPTED_FILE} -n ${LUKS_DEV_NAME}" 0 "Verify Clevis can unlock the device post-boot"
+            else
+                rlLogInfo "Package Mode: Verifying automatic unlock"
+                local unlocked=false
+                for i in $(seq 1 15); do
+                    rlLog "Attempt $i/15: Checking if device was unlocked automatically..."
+                    if cryptsetup status ${LUKS_DEV_NAME} > /dev/null 2>&1; then
+                        rlLog "Device ${LUKS_DEV_NAME} was automatically unlocked."
+                        unlocked=true
+                        break
+                    fi
+                    rlLog "Device not yet active. Waiting 6 seconds..."
+                    sleep 6
+                done
 
-            # Common verification steps
+                if ! $unlocked; then
+                    rlRun "journalctl -b --no-pager" 2 "Get full boot journal on failure"
+                    rlFail "Device ${LUKS_DEV_NAME} was not automatically unlocked after waiting."
+                fi
+            fi
+
+            # Common verification steps that follow the unlock
             rlLogInfo "Creating filesystem and mounting the unlocked device"
             rlRun "mkfs.xfs /dev/mapper/${LUKS_DEV_NAME}" 0 "Create filesystem"
             rlRun "mkdir -p ${MOUNT_POINT}"
@@ -164,14 +184,16 @@ function Clevis_Client_Test() {
             rlRun "findmnt ${MOUNT_POINT}" 0 "Verify device is mounted"
 
             rlLog "Clevis is correctly configured and functional for boot-time unlocking."
-            
             export SYNC_PROVIDER=${TANG_IP}
+
+            # Signal test completion AFTER successful verification
             rlRun "sync-set CLEVIS_TEST_DONE" 0 "Signal that client test verification is complete"
 
         rlPhaseEnd
 
-        # === COORDINATED CLEANUP ===
+        # === COORDINATED CLEANUP (CORRECTED) ===
         rlPhaseStartCleanup "Clevis Client: Cleanup"
+            # Perform all local cleanup actions first
             rlRun "umount ${MOUNT_POINT}" || rlLogInfo "Not mounted"
             rlRun "cryptsetup luksClose ${LUKS_DEV_NAME}" || rlLogInfo "Not open"
 
@@ -185,6 +207,7 @@ function Clevis_Client_Test() {
             rlRun "rmdir ${MOUNT_POINT}"
             rlRun "dracut -f --regenerate-all" 0 "Regenerate initramfs to remove Clevis hook"
 
+            # CORRECTED: Signal to the server that client cleanup is finished at the VERY END.
             rlRun "sync-set CLIENT_CLEANUP_DONE"
         rlPhaseEnd
     fi
