@@ -79,6 +79,8 @@ function Clevis_Client_Test() {
                 tmt-reboot
             fi
 
+            rlRun "setenforce 0" 0 "Set SELinux to permissive mode"
+
             rlLogInfo "Configuring client firewall"
             rlRun "systemctl enable --now firewalld"
             rlRun "firewall-cmd --add-port=${SYNC_GET_PORT}/tcp --permanent"
