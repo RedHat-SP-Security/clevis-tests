@@ -28,6 +28,7 @@
 # Include Beaker environment
 
 . /usr/share/beakerlib/beakerlib.sh || exit 1
+
 COOKIE_INSTALL="/var/opt/clevis_install_done"
 COOKIE_CONFIG="/var/opt/clevis_config_done"
 ENCRYPTED_FILE="/var/opt/encrypted-volume.luks"
@@ -45,22 +46,9 @@ function get_IP() {
     fi
 }
 
-function detect_rhel_major_version() {
-    if [ -f /etc/os-release ]; then
-        # shellcheck source=/dev/null
-        source /etc/os-release
-        RHEL_MAJOR_VERSION=$(echo "$VERSION_ID" | cut -d. -f1)
-        rlLog "Detected RHEL Major Version: $RHEL_MAJOR_VERSION"
-    else
-        rlLog "Warning: /etc/os-release not found. Cannot determine RHEL version."
-        RHEL_MAJOR_VERSION=0 # Default to a value that triggers the workaround
-    fi
-}
-
 function assign_roles() {
     if [ -n "${TMT_TOPOLOGY_BASH}" ] && [ -f "${TMT_TOPOLOGY_BASH}" ]; then
         rlLog "Sourcing roles from ${TMT_TOPOLOGY_BASH}"
-        # shellcheck source=/dev/null
         . "${TMT_TOPOLOGY_BASH}"
         export CLEVIS=${TMT_GUESTS["client.hostname"]}
         export TANG=${TMT_GUESTS["server.hostname"]}
@@ -81,12 +69,7 @@ function assign_roles() {
     rlLog "My Host/IP: $(hostname) / ${MY_IP}"
 }
 
-# --- TEST LOGIC ---
 function Clevis_Client_Test() {
-    # Detect mode and version on each run, as variables are reset after reboot
-    if bootc status &>/dev/null; then IMAGE_MODE=true; else IMAGE_MODE=false; fi
-    detect_rhel_major_version
-
     if [ ! -f "$COOKIE_CONFIG" ]; then
         rlPhaseStartSetup "Clevis Client: Initial Setup"
             rlLogInfo "Configuring client firewall"
@@ -94,7 +77,6 @@ function Clevis_Client_Test() {
             rlRun "firewall-cmd --add-port=${SYNC_GET_PORT}/tcp --permanent"
             rlRun "firewall-cmd --reload"
 
-            # --- COMMON SETUP FOR BOTH RHEL 9 and 10 ---
             rlLogInfo "Creating and binding LUKS device"
             rlRun "mkdir -p /var/opt"
             rlRun "truncate -s 512M ${ENCRYPTED_FILE}" 0 "Create 512MB image file"
@@ -103,7 +85,6 @@ function Clevis_Client_Test() {
             SSS_CONFIG='{"t":1,"pins":{"tang":[{"url":"http://'"${TANG_IP}"'","adv":"/tmp/adv.jws"}]}}'
             rlRun "clevis luks bind -f -d ${ENCRYPTED_FILE} sss '${SSS_CONFIG}'" 0 "Bind with SSS Tang pin" <<< 'password'
 
-            # --- CONDITIONAL SETUP FOR BOOT-TIME UNLOCK (RHEL 10+ only) ---
             if rlIsRHEL '>=10'; then
                 rlLog "RHEL $RHEL_MAJOR_VERSION detected. Configuring for true boot-time unlock test."
                 echo 'add_dracutmodules+=" clevis network network-manager "' > /etc/dracut.conf.d/99-clevis.conf
@@ -122,7 +103,6 @@ function Clevis_Client_Test() {
             tmt-reboot
         rlPhaseEnd
     else
-        # --- CONDITIONAL VERIFICATION (Post-Reboot) ---
         if rlIsRHEL '>=10'; then
             rlPhaseStartTest "Clevis Client: Verify Automatic Boot Unlock (RHEL 10+)"
                 rlRun "findmnt ${MOUNT_POINT}" 0 "Verify device was automatically mounted at boot"
@@ -145,10 +125,8 @@ function Clevis_Client_Test() {
             rlRun "umount ${MOUNT_POINT}" || rlLogInfo "Device not mounted"
             rlRun "cryptsetup luksClose ${LUKS_DEV_NAME}" || rlLogInfo "Device not open"
 
-            # Common cleanup
             rlRun "rm -f '${ENCRYPTED_FILE}' '$COOKIE_CONFIG' '$COOKIE_INSTALL' /tmp/adv.jws"
             
-            # Conditional cleanup for files only created on RHEL 10+
             if rlIsRHEL '>=10'; then
                 rlRun "rm -f /etc/dracut.conf.d/99-clevis.conf"
                 [ -f /etc/fstab ] && rlRun "sed -i '\|${MOUNT_POINT}|d' /etc/fstab"
@@ -180,9 +158,11 @@ function Tang_Server() {
         rlRun "curl -sf http://${TANG_IP}/adv"
         rlRun "sync-set TANG_SETUP_DONE" 0 "Tang setup of the server is done"
     rlPhaseEnd
+
     rlPhaseStartTest "Tang Server: Awaiting Client Test Completion"
         rlRun "sync-block CLEVIS_TEST_DONE ${CLEVIS_IP}" 0 "Waiting for the Clevis client test to complete"
     rlPhaseEnd
+    
     rlPhaseStartCleanup "Tang Server: Cleanup"
         rlRun "sync-block CLIENT_CLEANUP_DONE ${CLEVIS_IP}" 0 "Wait for Clevis client cleanup"
         rlRun "firewall-cmd --remove-port=${SYNC_GET_PORT}/tcp --permanent"
