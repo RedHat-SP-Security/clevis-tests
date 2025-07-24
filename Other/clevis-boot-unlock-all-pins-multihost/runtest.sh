@@ -31,7 +31,7 @@
 
 COOKIE_INSTALL="/var/opt/clevis_install_done"
 COOKIE_CONFIG="/var/opt/clevis_config_done"
-ENCRYPTED_FILE="/var/opt/encrypted-volume.luks"
+DEVICE="/dev/vdb"
 LUKS_DEV_NAME="tang-unlocked-device"
 MOUNT_POINT="/mnt/tang-test"
 SYNC_GET_PORT=2134
@@ -47,8 +47,6 @@ function get_IP() {
 
 function assign_roles() {
     if [ -n "${TMT_TOPOLOGY_BASH}" ] && [ -f "${TMT_TOPOLOGY_BASH}" ]; then
-        rlLog "Sourcing roles from ${TMT_TOPOLOGY_BASH}"
-        # shellcheck source=/dev/null
         . "${TMT_TOPOLOGY_BASH}"
         export CLEVIS=${TMT_GUESTS["client.hostname"]}
         export TANG=${TMT_GUESTS["server.hostname"]}
@@ -74,48 +72,43 @@ function Clevis_Client_Test() {
 
     if [ ! -f "$COOKIE_CONFIG" ]; then
         rlPhaseStartSetup "Clevis Client: Initial Setup"
-            # This first reboot is ESSENTIAL for Image Mode to layer new packages.
             if $IMAGE_MODE && [ ! -f "$COOKIE_INSTALL" ]; then
                 rlLog "Image Mode - Phase 1: Installing packages. Rebooting to apply."
                 rlRun "touch $COOKIE_INSTALL"
                 tmt-reboot
             fi
 
-            # From here on, the layered packages (clevis-dracut etc.) are present.
             rlLogInfo "Configuring client firewall"
             rlRun "systemctl enable --now firewalld"
             rlRun "firewall-cmd --add-port=${SYNC_GET_PORT}/tcp --permanent"
             rlRun "firewall-cmd --reload"
 
             rlLogInfo "Creating and binding LUKS device"
-            rlRun "mkdir -p /var/opt"
-            rlRun "truncate -s 512M ${ENCRYPTED_FILE}" 0 "Create 512MB image file"
-            rlRun "echo -n 'password' | cryptsetup luksFormat ${ENCRYPTED_FILE} -" 0 "Format device with LUKS2"
-            rlRun "curl -sf http://${TANG_IP}/adv -o /tmp/adv.jws" 0 "Download Tang advertisement"
-            SSS_CONFIG='{"t":1,"pins":{"tang":[{"url":"http://'"${TANG_IP}"'","adv":"/tmp/adv.jws"}]}}'
-            rlRun "clevis luks bind -f -d ${ENCRYPTED_FILE} sss '${SSS_CONFIG}'" 0 "Bind with SSS Tang pin" <<< 'password'
+            rlRun "wipefs -a ${DEVICE}" 0 "Wipe any old signatures"
+            rlRun "echo -n 'password' | cryptsetup luksFormat ${DEVICE} -" 0 "Format with LUKS2"
+
+            ADV=$(curl -sf "http://${TANG_IP}/adv")
+            SSS_CONFIG="{\"t\":1,\"pins\":{\"tang\":[{\"url\":\"http://${TANG_IP}\",\"adv\":${ADV}}]}}"
+            rlRun "clevis luks bind -f -d ${DEVICE} sss '${SSS_CONFIG}'" 0 "Bind with Tang pin" <<< 'password'
 
             rlLog "Configuring system for automatic boot-time unlock"
-            # 1. Configure Dracut for initramfs
             echo 'add_dracutmodules+=" clevis network network-manager "' > /etc/dracut.conf.d/99-clevis.conf
             echo 'kernel_cmdline+=" rd.neednet=1 ip=dhcp "' >> /etc/dracut.conf.d/99-clevis.conf
 
-            # 2. Configure crypttab for auto-unlock
-            echo "${LUKS_DEV_NAME} ${ENCRYPTED_FILE} none _netdev,initramfs" >> /etc/crypttab
+            echo "${LUKS_DEV_NAME} ${DEVICE} none _netdev,initramfs" >> /etc/crypttab
 
-            # 3. Configure fstab for auto-mount
             rlRun "mkdir -p ${MOUNT_POINT}"
             echo "/dev/mapper/${LUKS_DEV_NAME} ${MOUNT_POINT} xfs defaults,nofail 0 0" >> /etc/fstab
 
-            # 4. Pre-format the filesystem so it can be mounted on next boot
-            rlRun "clevis luks unlock -d ${ENCRYPTED_FILE} -n ${LUKS_DEV_NAME}" 0 "Temporarily unlock for formatting"
-            rlRun "mkfs.xfs /dev/mapper/${LUKS_DEV_NAME}" 0 "Create filesystem"
-            rlRun "cryptsetup luksClose ${LUKS_DEV_NAME}" 0 "Re-lock the device"
+            rlRun "clevis luks unlock -d ${DEVICE} -n ${LUKS_DEV_NAME}" 0 "Temporarily unlock"
+            rlRun "mkfs.xfs /dev/mapper/${LUKS_DEV_NAME}" 0 "Format with XFS"
+            rlRun "cryptsetup luksClose ${LUKS_DEV_NAME}" 0 "Re-lock"
 
-            # 5. In Package Mode, manually regenerate initramfs.
-            # In Image Mode, this MUST be skipped. bootc handles it automatically.
             if ! $IMAGE_MODE; then
                 rlRun "dracut -f --regenerate-all" 0 "Regenerate initramfs"
+            else
+                rlLog "Image Mode - rebooting to apply dracut config"
+                tmt-reboot
             fi
 
             rlRun "touch '$COOKIE_CONFIG'"
@@ -123,27 +116,25 @@ function Clevis_Client_Test() {
         rlPhaseEnd
     else
         rlPhaseStartTest "Clevis Client: Verify Automatic Boot Unlock"
-            # This unified verification now works for both RHEL 9 and 10
-            rlRun "findmnt ${MOUNT_POINT}" 0 "Verify device was automatically mounted at boot"
-            rlLog "Clevis correctly unlocked and mounted the device at boot time."
+            rlRun "findmnt ${MOUNT_POINT}" 0 "Verify device was automatically mounted"
+            rlLog "Success: Device was decrypted and mounted at boot"
             rlRun "sync-set CLEVIS_TEST_DONE"
         rlPhaseEnd
 
         rlPhaseStartCleanup "Clevis Client: Cleanup"
-            rlRun "umount ${MOUNT_POINT}" || rlLogInfo "Device not mounted"
-            rlRun "cryptsetup luksClose ${LUKS_DEV_NAME}" || rlLogInfo "Device not open"
+            rlRun "umount ${MOUNT_POINT}" || rlLogInfo "Not mounted"
+            rlRun "cryptsetup luksClose ${LUKS_DEV_NAME}" || rlLogInfo "Not open"
 
-            # Clean up all configuration files
-            rlRun "rm -f '${ENCRYPTED_FILE}' '$COOKIE_CONFIG' '$COOKIE_INSTALL' /etc/dracut.conf.d/99-clevis.conf /tmp/adv.jws"
+            rlRun "rm -f '$COOKIE_CONFIG' '$COOKIE_INSTALL'"
+            rlRun "rm -f /etc/dracut.conf.d/99-clevis.conf"
             [ -f /etc/fstab ] && rlRun "sed -i '\|${MOUNT_POINT}|d' /etc/fstab"
             [ -f /etc/crypttab ] && rlRun "sed -i '\|${LUKS_DEV_NAME}|d' /etc/crypttab"
-            rlRun "rmdir ${MOUNT_POINT}" || rlLogInfo "Mount point directory already removed"
+            rlRun "rmdir ${MOUNT_POINT}" || rlLogInfo "Already removed"
 
-            # In Package Mode, manually regenerate initramfs to remove the hook.
             if ! $IMAGE_MODE; then
-                rlRun "dracut -f --regenerate-all" 0 "Regenerate initramfs to remove Clevis hook"
+                rlRun "dracut -f --regenerate-all"
             fi
-            
+
             unset SYNC_PROVIDER
             rlRun "sync-set CLIENT_CLEANUP_DONE"
         rlPhaseEnd
@@ -163,15 +154,16 @@ function Tang_Server() {
         rlRun "jose jwk gen -i '{\"alg\":\"ES512\"}' -o /var/db/tang/sig.jwk"
         rlRun "jose jwk gen -i '{\"alg\":\"ECMR\"}' -o /var/db/tang/exc.jwk"
         rlRun "systemctl enable --now tangd.socket"
-        rlRun "systemctl status tangd.socket"
         rlRun "curl -sf http://${TANG_IP}/adv"
-        rlRun "sync-set TANG_SETUP_DONE" 0 "Tang setup of the server is done"
+        rlRun "sync-set TANG_SETUP_DONE"
     rlPhaseEnd
-    rlPhaseStartTest "Tang Server: Awaiting Client Test Completion"
-        rlRun "sync-block CLEVIS_TEST_DONE ${CLEVIS_IP}" 0 "Waiting for the Clevis client test to complete"
+
+    rlPhaseStartTest "Tang Server: Wait for Client"
+        rlRun "sync-block CLEVIS_TEST_DONE ${CLEVIS_IP}"
     rlPhaseEnd
+
     rlPhaseStartCleanup "Tang Server: Cleanup"
-        rlRun "sync-block CLIENT_CLEANUP_DONE ${CLEVIS_IP}" 0 "Wait for Clevis client cleanup"
+        rlRun "sync-block CLIENT_CLEANUP_DONE ${CLEVIS_IP}"
         rlRun "firewall-cmd --remove-port=${SYNC_GET_PORT}/tcp --permanent"
         rlRun "firewall-cmd --remove-port=${SYNC_SET_PORT}/tcp --permanent"
         rlRun "firewall-cmd --remove-service=http --permanent"
