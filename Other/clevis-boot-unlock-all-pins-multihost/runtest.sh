@@ -94,13 +94,6 @@ function Clevis_Client_Test() {
             rlRun "firewall-cmd --add-port=${SYNC_GET_PORT}/tcp --permanent"
             rlRun "firewall-cmd --reload"
 
-            # The initial reboot to apply layered packages
-            if $IMAGE_MODE && [ ! -f "$COOKIE_INSTALL" ]; then
-                rlLog "Image Mode - Phase 1: Installing packages. Rebooting to apply."
-                rlRun "touch $COOKIE_INSTALL"
-                tmt-reboot
-            fi
-
             # --- COMMON SETUP FOR BOTH RHEL 9 and 10 ---
             rlLogInfo "Creating and binding LUKS device"
             rlRun "mkdir -p /var/opt"
