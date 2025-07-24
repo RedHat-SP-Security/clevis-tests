@@ -109,7 +109,7 @@ function Clevis_Client_Test() {
 
             rlLogInfo "Configuring system for automatic boot-time unlock"
             # 1. Configure Dracut to include Clevis and networking in initramfs
-            echo 'add_dracutmodules+=" clevis network "' > /etc/dracut.conf.d/99-clevis.conf
+            echo 'add_dracutmodules+=" clevis network network-manager "' > /etc/dracut.conf.d/99-clevis.conf
             echo 'kernel_cmdline+=" rd.neednet=1 ip=dhcp "' >> /etc/dracut.conf.d/99-clevis.conf
 
             # 2. Configure crypttab to automatically unlock the device at boot
