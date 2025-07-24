@@ -113,7 +113,7 @@ function Clevis_Client_Test() {
             echo 'kernel_cmdline+=" rd.neednet=1 ip=dhcp "' >> /etc/dracut.conf.d/99-clevis.conf
 
             # 2. Configure crypttab to automatically unlock the device at boot
-            echo "${LUKS_DEV_NAME} ${DEVICE_TO_ENCRYPT} none _netdev" >> /etc/crypttab
+            echo "${LUKS_DEV_NAME} ${DEVICE_TO_ENCRYPT} none _netdev,initramfs" >> /etc/crypttab
 
             # 3. Configure fstab to automatically mount the device once unlocked
             rlRun "mkdir -p ${MOUNT_POINT}"
