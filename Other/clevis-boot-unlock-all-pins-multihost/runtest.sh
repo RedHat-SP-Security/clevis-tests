@@ -37,7 +37,6 @@ MOUNT_POINT="/mnt/tang-test"
 SYNC_GET_PORT=2134
 SYNC_SET_PORT=2135
 
-# --- HELPER FUNCTIONS ---
 function get_IP() {
     if echo "$1" | grep -E -q '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+'; then
         echo "$1"
@@ -70,8 +69,16 @@ function assign_roles() {
 }
 
 function Clevis_Client_Test() {
+    if bootc status &>/dev/null; then IMAGE_MODE=true; else IMAGE_MODE=false; fi
+
     if [ ! -f "$COOKIE_CONFIG" ]; then
         rlPhaseStartSetup "Clevis Client: Initial Setup"
+            if $IMAGE_MODE && [ ! -f "$COOKIE_INSTALL" ]; then
+                rlLog "Image Mode - Phase 1: Installing packages. Rebooting to apply."
+                rlRun "touch $COOKIE_INSTALL"
+                tmt-reboot
+            fi
+
             rlLogInfo "Configuring client firewall"
             rlRun "systemctl enable --now firewalld"
             rlRun "firewall-cmd --add-port=${SYNC_GET_PORT}/tcp --permanent"
@@ -85,19 +92,16 @@ function Clevis_Client_Test() {
             SSS_CONFIG='{"t":1,"pins":{"tang":[{"url":"http://'"${TANG_IP}"'","adv":"/tmp/adv.jws"}]}}'
             rlRun "clevis luks bind -f -d ${ENCRYPTED_FILE} sss '${SSS_CONFIG}'" 0 "Bind with SSS Tang pin" <<< 'password'
 
-            if rlIsRHEL '>=10'; then
-                rlLog "RHEL $RHEL_MAJOR_VERSION detected. Configuring for true boot-time unlock test."
-                echo 'add_dracutmodules+=" clevis network network-manager "' > /etc/dracut.conf.d/99-clevis.conf
-                echo 'kernel_cmdline+=" rd.neednet=1 ip=dhcp "' >> /etc/dracut.conf.d/99-clevis.conf
-                echo "${LUKS_DEV_NAME} ${ENCRYPTED_FILE} none _netdev,initramfs" >> /etc/crypttab
-                rlRun "mkdir -p ${MOUNT_POINT}"
-                echo "/dev/mapper/${LUKS_DEV_NAME} ${MOUNT_POINT} xfs defaults,nofail 0 0" >> /etc/fstab
-                rlRun "clevis luks unlock -d ${ENCRYPTED_FILE} -n ${LUKS_DEV_NAME}" 0 "Temporarily unlock for formatting"
-                rlRun "mkfs.xfs /dev/mapper/${LUKS_DEV_NAME}" 0 "Create filesystem"
-                rlRun "cryptsetup luksClose ${LUKS_DEV_NAME}" 0 "Re-lock the device"
-            else
-                rlLog "RHEL $RHEL_MAJOR_VERSION detected. Skipping boot-time unlock configuration."
-            fi
+            rlLog "Configuring system for boot-time unlocking of the LUKS device"
+            echo 'add_dracutmodules+=" clevis network network-manager "' > /etc/dracut.conf.d/99-clevis.conf
+            echo 'kernel_cmdline+=" rd.neednet=1 ip=dhcp "' >> /etc/dracut.conf.d/99-clevis.conf
+            rlRun "dracut -f --regenerate-all" 0 "Regenerate initramfs with Clevis support"
+            echo "${LUKS_DEV_NAME} ${ENCRYPTED_FILE} none _netdev,initramfs" >> /etc/crypttab
+            rlRun "mkdir -p ${MOUNT_POINT}"
+            echo "/dev/mapper/${LUKS_DEV_NAME} ${MOUNT_POINT} xfs defaults,nofail 0 0" >> /etc/fstab
+            rlRun "clevis luks unlock -d ${ENCRYPTED_FILE} -n ${LUKS_DEV_NAME}" 0 "Temporarily unlock for formatting"
+            rlRun "mkfs.xfs /dev/mapper/${LUKS_DEV_NAME}" 0 "Create filesystem"
+            rlRun "cryptsetup luksClose ${LUKS_DEV_NAME}" 0 "Re-lock the device"
 
             rlRun "touch '$COOKIE_CONFIG'"
             tmt-reboot
@@ -107,19 +111,18 @@ function Clevis_Client_Test() {
             rlPhaseStartTest "Clevis Client: Verify Automatic Boot Unlock (RHEL 10+)"
                 rlRun "findmnt ${MOUNT_POINT}" 0 "Verify device was automatically mounted at boot"
                 rlLog "Clevis correctly unlocked and mounted the device at boot time."
+            rlPhaseEnd
         else
-            rlPhaseStartTest "Clevis Client: Verify Post-Boot Unlock (RHEL 9)"
-                rlLogInfo "Verifying Clevis can unlock the device now that the system is booted"
-                rlRun "clevis luks unlock -d ${ENCRYPTED_FILE} -n ${LUKS_DEV_NAME}" 0 "Verify Clevis can unlock the device post-boot"
-                rlLogInfo "Creating filesystem and mounting the unlocked device"
-                rlRun "mkfs.xfs /dev/mapper/${LUKS_DEV_NAME}" 0 "Create filesystem"
+            rlPhaseStartTest "Clevis Client: Verify LUKS Device Unlocked at Boot (RHEL 9)"
+                rlLog "Checking if Clevis unlocked device exists (RHEL 9 post-boot unlock)"
+                rlRun "[ -e /dev/mapper/${LUKS_DEV_NAME} ]" 0 "Mapped device exists"
+                rlLog "Device unlocked, now mounting manually"
                 rlRun "mkdir -p ${MOUNT_POINT}"
                 rlRun "mount /dev/mapper/${LUKS_DEV_NAME} ${MOUNT_POINT}" 0 "Mount the device"
                 rlRun "findmnt ${MOUNT_POINT}" 0 "Verify device is mounted"
-                rlLog "Clevis is correctly configured and functional for post-boot unlocking."
+                rlLog "Clevis unlocked the device at boot; RHEL 9 does not mount it automatically."
+            rlPhaseEnd
         fi
-        rlRun "sync-set CLEVIS_TEST_DONE"
-        rlPhaseEnd
 
         rlPhaseStartCleanup "Clevis Client: Cleanup"
             rlRun "umount ${MOUNT_POINT}" || rlLogInfo "Device not mounted"
@@ -158,11 +161,9 @@ function Tang_Server() {
         rlRun "curl -sf http://${TANG_IP}/adv"
         rlRun "sync-set TANG_SETUP_DONE" 0 "Tang setup of the server is done"
     rlPhaseEnd
-
     rlPhaseStartTest "Tang Server: Awaiting Client Test Completion"
         rlRun "sync-block CLEVIS_TEST_DONE ${CLEVIS_IP}" 0 "Waiting for the Clevis client test to complete"
     rlPhaseEnd
-    
     rlPhaseStartCleanup "Tang Server: Cleanup"
         rlRun "sync-block CLIENT_CLEANUP_DONE ${CLEVIS_IP}" 0 "Wait for Clevis client cleanup"
         rlRun "firewall-cmd --remove-port=${SYNC_GET_PORT}/tcp --permanent"
