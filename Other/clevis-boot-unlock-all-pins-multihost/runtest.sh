@@ -69,19 +69,18 @@ function assign_roles() {
 }
 
 function Clevis_Client_Test() {
-    local IMAGE_MODE=false
-    if command -v bootc &>/dev/null && bootc status &>/dev/null; then
-        IMAGE_MODE=true
-    fi
+    if bootc status &>/dev/null; then IMAGE_MODE=true; else IMAGE_MODE=false; fi
 
     if [ ! -f "$COOKIE_CONFIG" ]; then
         rlPhaseStartSetup "Clevis Client: Initial Setup"
+            # This first reboot is ESSENTIAL for Image Mode to layer new packages.
             if $IMAGE_MODE && [ ! -f "$COOKIE_INSTALL" ]; then
                 rlLog "Image Mode - Phase 1: Installing packages. Rebooting to apply."
                 rlRun "touch $COOKIE_INSTALL"
                 tmt-reboot
             fi
 
+            # From here on, the layered packages (clevis-dracut etc.) are present.
             rlLogInfo "Configuring client firewall"
             rlRun "systemctl enable --now firewalld"
             rlRun "firewall-cmd --add-port=${SYNC_GET_PORT}/tcp --permanent"
@@ -92,82 +91,56 @@ function Clevis_Client_Test() {
             rlRun "truncate -s 512M ${ENCRYPTED_FILE}" 0 "Create 512MB image file"
             rlRun "echo -n 'password' | cryptsetup luksFormat ${ENCRYPTED_FILE} -" 0 "Format device with LUKS2"
             rlRun "curl -sf http://${TANG_IP}/adv -o /tmp/adv.jws" 0 "Download Tang advertisement"
-
-            # Compose SSS config with tang pin, can add tpm2 here if needed
             SSS_CONFIG='{"t":1,"pins":{"tang":[{"url":"http://'"${TANG_IP}"'","adv":"/tmp/adv.jws"}]}}'
             rlRun "clevis luks bind -f -d ${ENCRYPTED_FILE} sss '${SSS_CONFIG}'" 0 "Bind with SSS Tang pin" <<< 'password'
 
-            rlLog "Configuring system for boot-time unlocking of the LUKS device"
+            rlLog "Configuring system for automatic boot-time unlock"
+            # 1. Configure Dracut for initramfs
+            echo 'add_dracutmodules+=" clevis network network-manager "' > /etc/dracut.conf.d/99-clevis.conf
+            echo 'kernel_cmdline+=" rd.neednet=1 ip=dhcp "' >> /etc/dracut.conf.d/99-clevis.conf
 
-            # RHEL 10+ unlock-during-boot: configure dracut, crypttab, fstab accordingly
-            if rlIsRHEL '>=10'; then
-                rlLog "Configuring dracut and crypttab for unlock-during-boot on RHEL 10+"
-                # Enable clevis and network modules in dracut
-                echo 'add_dracutmodules+=" clevis network network-manager "' > /etc/dracut.conf.d/99-clevis.conf
-                echo 'kernel_cmdline+=" rd.neednet=1 ip=dhcp "' >> /etc/dracut.conf.d/99-clevis.conf
-                rlRun "dracut -f --regenerate-all" 0 "Regenerate initramfs with Clevis support"
+            # 2. Configure crypttab for auto-unlock
+            echo "${LUKS_DEV_NAME} ${ENCRYPTED_FILE} none _netdev,initramfs" >> /etc/crypttab
 
-                # Add crypttab entry for unlock-during-boot, with _netdev and initramfs options
-                echo "${LUKS_DEV_NAME} ${ENCRYPTED_FILE} none _netdev,initramfs" >> /etc/crypttab
-
-                # Add mount point in fstab with nofail so boot does not fail if unlock fails
-                echo "/dev/mapper/${LUKS_DEV_NAME} ${MOUNT_POINT} xfs defaults,nofail 0 0" >> /etc/fstab
-
-            else
-                # RHEL 9: no unlock-during-boot, unlock happens post-boot
-                rlLog "Configuring for RHEL 9 post-boot unlock"
-                echo "${LUKS_DEV_NAME} ${ENCRYPTED_FILE} none" >> /etc/crypttab
-
-                # fstab entry same as above, but manual mount is needed in test
-                echo "/dev/mapper/${LUKS_DEV_NAME} ${MOUNT_POINT} xfs defaults,nofail 0 0" >> /etc/fstab
-            fi
-
+            # 3. Configure fstab for auto-mount
             rlRun "mkdir -p ${MOUNT_POINT}"
+            echo "/dev/mapper/${LUKS_DEV_NAME} ${MOUNT_POINT} xfs defaults,nofail 0 0" >> /etc/fstab
 
-            # Unlock temporarily to format
+            # 4. Pre-format the filesystem so it can be mounted on next boot
             rlRun "clevis luks unlock -d ${ENCRYPTED_FILE} -n ${LUKS_DEV_NAME}" 0 "Temporarily unlock for formatting"
             rlRun "mkfs.xfs /dev/mapper/${LUKS_DEV_NAME}" 0 "Create filesystem"
             rlRun "cryptsetup luksClose ${LUKS_DEV_NAME}" 0 "Re-lock the device"
+
+            # 5. In Package Mode, manually regenerate initramfs. In Image Mode, bootc handles this automatically.
+            if ! $IMAGE_MODE; then
+                rlRun "dracut -f --regenerate-all" 0 "Regenerate initramfs"
+            fi
 
             rlRun "touch '$COOKIE_CONFIG'"
             tmt-reboot
         rlPhaseEnd
     else
-        if rlIsRHEL '>=10'; then
-            rlPhaseStartTest "Clevis Client: Verify Automatic Boot Unlock (RHEL 10+)"
-                rlRun "findmnt ${MOUNT_POINT}" 0 "Verify device was automatically mounted at boot"
-                rlLog "Clevis correctly unlocked and mounted the device at boot time."
-            rlPhaseEnd
-        else
-            rlPhaseStartTest "Clevis Client: Verify LUKS Device Unlocked at Boot (RHEL 9)"
-                rlLog "Checking if Clevis unlocked device exists (RHEL 9 post-boot unlock)"
-                rlRun "[ -e /dev/mapper/${LUKS_DEV_NAME} ]" 0 "Mapped device exists"
-                rlLog "Device unlocked, now mounting manually"
-                rlRun "mkdir -p ${MOUNT_POINT}"
-                rlRun "mount /dev/mapper/${LUKS_DEV_NAME} ${MOUNT_POINT}" 0 "Mount the device"
-                rlRun "findmnt ${MOUNT_POINT}" 0 "Verify device is mounted"
-                rlLog "Clevis unlocked the device at boot; RHEL 9 does not mount it automatically."
-            rlPhaseEnd
-        fi
+        rlPhaseStartTest "Clevis Client: Verify Automatic Boot Unlock"
+            # The test succeeds if the device was automatically unlocked and mounted by the system.
+            rlRun "findmnt ${MOUNT_POINT}" 0 "Verify device was automatically mounted at boot"
+            rlLog "Clevis correctly unlocked and mounted the device at boot time."
+            rlRun "sync-set CLEVIS_TEST_DONE"
+        rlPhaseEnd
 
         rlPhaseStartCleanup "Clevis Client: Cleanup"
             rlRun "umount ${MOUNT_POINT}" || rlLogInfo "Device not mounted"
             rlRun "cryptsetup luksClose ${LUKS_DEV_NAME}" || rlLogInfo "Device not open"
 
-            rlRun "rm -f '${ENCRYPTED_FILE}' '$COOKIE_CONFIG' '$COOKIE_INSTALL' /tmp/adv.jws"
-
-            if rlIsRHEL '>=10'; then
-                rlRun "rm -f /etc/dracut.conf.d/99-clevis.conf"
-                [ -f /etc/fstab ] && rlRun "sed -i '\|${MOUNT_POINT}|d' /etc/fstab"
-                [ -f /etc/crypttab ] && rlRun "sed -i '\|${LUKS_DEV_NAME}|d' /etc/crypttab"
-            else
-                # Cleanup for RHEL 9 crypttab and fstab entries
-                [ -f /etc/fstab ] && rlRun "sed -i '\|${MOUNT_POINT}|d' /etc/fstab"
-                [ -f /etc/crypttab ] && rlRun "sed -i '\|${LUKS_DEV_NAME}|d' /etc/crypttab"
-            fi
-
+            rlRun "rm -f '${ENCRYPTED_FILE}' '$COOKIE_CONFIG' '$COOKIE_INSTALL' /etc/dracut.conf.d/99-clevis.conf /tmp/adv.jws"
+            [ -f /etc/fstab ] && rlRun "sed -i '\|${MOUNT_POINT}|d' /etc/fstab"
+            [ -f /etc/crypttab ] && rlRun "sed -i '\|${LUKS_DEV_NAME}|d' /etc/crypttab"
             rlRun "rmdir ${MOUNT_POINT}" || rlLogInfo "Mount point directory already removed"
 
+            # In Package Mode, manually regenerate initramfs to remove the hook.
+            if ! $IMAGE_MODE; then
+                rlRun "dracut -f --regenerate-all" 0 "Regenerate initramfs to remove Clevis hook"
+            fi
+            
             unset SYNC_PROVIDER
             rlRun "sync-set CLIENT_CLEANUP_DONE"
         rlPhaseEnd
