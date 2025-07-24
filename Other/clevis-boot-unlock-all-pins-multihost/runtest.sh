@@ -48,6 +48,7 @@ function get_IP() {
 function assign_roles() {
     if [ -n "${TMT_TOPOLOGY_BASH}" ] && [ -f "${TMT_TOPOLOGY_BASH}" ]; then
         rlLog "Sourcing roles from ${TMT_TOPOLOGY_BASH}"
+        # shellcheck source=/dev/null
         . "${TMT_TOPOLOGY_BASH}"
         export CLEVIS=${TMT_GUESTS["client.hostname"]}
         export TANG=${TMT_GUESTS["server.hostname"]}
@@ -111,7 +112,8 @@ function Clevis_Client_Test() {
             rlRun "mkfs.xfs /dev/mapper/${LUKS_DEV_NAME}" 0 "Create filesystem"
             rlRun "cryptsetup luksClose ${LUKS_DEV_NAME}" 0 "Re-lock the device"
 
-            # 5. In Package Mode, manually regenerate initramfs. In Image Mode, bootc handles this automatically.
+            # 5. In Package Mode, manually regenerate initramfs.
+            # In Image Mode, this MUST be skipped. bootc handles it automatically.
             if ! $IMAGE_MODE; then
                 rlRun "dracut -f --regenerate-all" 0 "Regenerate initramfs"
             fi
@@ -121,7 +123,7 @@ function Clevis_Client_Test() {
         rlPhaseEnd
     else
         rlPhaseStartTest "Clevis Client: Verify Automatic Boot Unlock"
-            # The test succeeds if the device was automatically unlocked and mounted by the system.
+            # This unified verification now works for both RHEL 9 and 10
             rlRun "findmnt ${MOUNT_POINT}" 0 "Verify device was automatically mounted at boot"
             rlLog "Clevis correctly unlocked and mounted the device at boot time."
             rlRun "sync-set CLEVIS_TEST_DONE"
@@ -131,6 +133,7 @@ function Clevis_Client_Test() {
             rlRun "umount ${MOUNT_POINT}" || rlLogInfo "Device not mounted"
             rlRun "cryptsetup luksClose ${LUKS_DEV_NAME}" || rlLogInfo "Device not open"
 
+            # Clean up all configuration files
             rlRun "rm -f '${ENCRYPTED_FILE}' '$COOKIE_CONFIG' '$COOKIE_INSTALL' /etc/dracut.conf.d/99-clevis.conf /tmp/adv.jws"
             [ -f /etc/fstab ] && rlRun "sed -i '\|${MOUNT_POINT}|d' /etc/fstab"
             [ -f /etc/crypttab ] && rlRun "sed -i '\|${LUKS_DEV_NAME}|d' /etc/crypttab"
