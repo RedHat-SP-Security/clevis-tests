@@ -94,9 +94,9 @@ function Clevis_Client_Test() {
             fi
 
             rlLog "Waiting for Tang server at ${TANG_IP} to be ready..."
-            
+
             if ! $IMAGE_MODE; then
-                rlRun "yum install -y clevis-dracut clevis-systemd" 0 "Install Clevis components"
+                rlRun "dnf install -y clevis-dracut clevis-systemd" 0 "Install Clevis components"
             fi
 
             if $IMAGE_MODE; then
@@ -110,7 +110,7 @@ function Clevis_Client_Test() {
                 DEVICE_TO_ENCRYPT="${RAM_DISK_DEVICE}"
             fi
 
-            rlRun "echo -n 'password' | cryptsetup luksFormat ${DEVICE_TO_ENCRYPT} -" 0 "Format device with LUKS2"
+            rlRun "cryptsetup luksFormat ${DEVICE_TO_ENCRYPT} -" 0 "Format device with LUKS2" <<< 'password'
             rlLogInfo "Fetching Tang advertisement"
             rlRun "curl -sf http://${TANG_IP}/adv -o /tmp/adv.jws" 0 "Download Tang advertisement"
 
@@ -141,7 +141,8 @@ function Clevis_Client_Test() {
             if [ "$IMAGE_MODE" = "false" ]; then
                 echo 'add_drivers+=" brd "' >> /etc/dracut.conf.d/99-clevis.conf
             fi
-            rlRun "dracut -f --regenerate-all" 0 "Regenerate initramfs"
+
+            rlRun "dracut -f" 0 "Regenerate initramfs"
 
             rlRun "touch '$COOKIE_CONFIG'"
             tmt-reboot
@@ -196,7 +197,8 @@ function Clevis_Client_Test() {
             [ -f /etc/crypttab ] && rlRun "sed -i \"/${LUKS_DEV_NAME}/d\" /etc/crypttab"
             [ -f /etc/fstab ] && rlRun "sed -i \"|${MOUNT_POINT}|d\" /etc/fstab"
             rlRun "rmdir ${MOUNT_POINT}"
-            rlRun "dracut -f --regenerate-all" 0 "Regenerate initramfs to remove Clevis hook"
+
+            rlRun "dracut -f" 0 "Regenerate initramfs to remove Clevis hook"
 
             unset SYNC_PROVIDER
             rlRun "sync-set CLIENT_CLEANUP_DONE"
@@ -207,7 +209,6 @@ function Clevis_Client_Test() {
 function Tang_Server() {
     rlPhaseStartSetup "Tang Server: Setup"
         rlRun "systemctl enable --now rngd"
-        rlRun "setenforce 0"
         rlRun "systemctl enable --now firewalld"
         rlRun "firewall-cmd --add-port=${SYNC_GET_PORT}/tcp --permanent"
         rlRun "firewall-cmd --add-port=${SYNC_SET_PORT}/tcp --permanent"
@@ -233,7 +234,6 @@ function Tang_Server() {
         rlRun "firewall-cmd --remove-port=${SYNC_SET_PORT}/tcp --permanent"
         rlRun "firewall-cmd --remove-service=http --permanent"
         rlRun "firewall-cmd --reload"
-        rlRun "setenforce 1" 0 "Restore SELinux permissive settings"
     rlPhaseEnd
 }
 
