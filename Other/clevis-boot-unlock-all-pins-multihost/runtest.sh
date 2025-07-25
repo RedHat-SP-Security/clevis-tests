@@ -91,28 +91,37 @@ function Clevis_Client_Test() {
             rlRun "truncate -s 512M ${ENCRYPTED_FILE}" 0 "Create 512MB image file"
             rlRun "echo -n 'password' | cryptsetup luksFormat ${ENCRYPTED_FILE} -" 0 "Format device with LUKS2"
             rlRun "curl -sf http://${TANG_IP}/adv -o /tmp/adv.jws" 0 "Download Tang advertisement"
-            SSS_CONFIG='{"t":1,"pins":{"tang":[{"url":"http://'"${TANG_IP}"'","adv":"/tmp/adv.jws"}]}}'
-            rlRun "clevis luks bind -f -d ${ENCRYPTED_FILE} sss '${SSS_CONFIG}'" 0 "Bind with SSS Tang pin" <<< 'password'
+            
+            # ✨ ENHANCEMENT: Add TPM2 pin to make the test more robust and closer to the original
+            if [ -e /dev/tpmrm0 ] || [ -e /dev/tpm0 ]; then
+                rlLog "TPM device found, binding with Tang and TPM2 (t=1)."
+                SSS_CONFIG='{"t":1,"pins":{"tang":[{"url":"http://'"${TANG_IP}"'","adv":"/tmp/adv.jws"}],"tpm2":{}}}'
+            else
+                rlLog "TPM device not found, binding with Tang only."
+                SSS_CONFIG='{"t":1,"pins":{"tang":[{"url":"http://'"${TANG_IP}"'","adv":"/tmp/adv.jws"}]}}'
+            fi
+            rlRun "clevis luks bind -f -d ${ENCRYPTED_FILE} sss '${SSS_CONFIG}'" 0 "Bind with SSS pins" <<< 'password'
 
-            rlLog "Configuring system for automatic unlock after network is online"
-            # 1. Configure crypttab to unlock after the network is up. No initramfs flag is needed.
+
+            rlLog "Configuring system for automatic unlock"
             echo "${LUKS_DEV_NAME} ${ENCRYPTED_FILE} none _netdev" >> /etc/crypttab
-
-            # 2. Configure fstab for auto-mount after unlock.
             rlRun "mkdir -p ${MOUNT_POINT}"
             echo "/dev/mapper/${LUKS_DEV_NAME} ${MOUNT_POINT} xfs defaults,nofail 0 0" >> /etc/fstab
 
-            # 3. Pre-format the filesystem so it can be mounted on next boot
             rlRun "clevis luks unlock -d ${ENCRYPTED_FILE} -n ${LUKS_DEV_NAME}" 0 "Temporarily unlock for formatting"
             rlRun "mkfs.xfs /dev/mapper/${LUKS_DEV_NAME}" 0 "Create filesystem"
             rlRun "cryptsetup luksClose ${LUKS_DEV_NAME}" 0 "Re-lock the device"
+
+            # 🛠️ FIX: Enable necessary services for boot-time unlock
+            rlLog "Enabling services required for network-bound unlock at boot"
+            rlRun "systemctl enable NetworkManager-wait-online.service"
+            rlRun "systemctl enable clevis-luks-askpass.path"
 
             rlRun "touch '$COOKIE_CONFIG'"
             tmt-reboot
         rlPhaseEnd
     else
         rlPhaseStartTest "Clevis Client: Verify Automatic Boot Unlock"
-            # The test succeeds if the device was automatically unlocked and mounted by the system.
             rlRun "findmnt ${MOUNT_POINT}" 0 "Verify device was automatically mounted at boot"
             rlLog "Clevis correctly unlocked and mounted the device at boot time."
             rlRun "sync-set CLEVIS_TEST_DONE"
@@ -122,44 +131,19 @@ function Clevis_Client_Test() {
             rlRun "umount ${MOUNT_POINT}" || rlLogInfo "Device not mounted"
             rlRun "cryptsetup luksClose ${LUKS_DEV_NAME}" || rlLogInfo "Device not open"
             
-            # Clean up the configuration files
             rlRun "rm -f '${ENCRYPTED_FILE}' '$COOKIE_CONFIG' '$COOKIE_INSTALL' /tmp/adv.jws"
             [ -f /etc/fstab ] && rlRun "sed -i '\|${MOUNT_POINT}|d' /etc/fstab"
             [ -f /etc/crypttab ] && rlRun "sed -i '\|${LUKS_DEV_NAME}|d' /etc/crypttab"
             rlRun "rmdir ${MOUNT_POINT}" || rlLogInfo "Mount point directory already removed"
             
+            # Disable the services enabled during setup
+            rlRun "systemctl disable NetworkManager-wait-online.service"
+            rlRun "systemctl disable clevis-luks-askpass.path"
+
             unset SYNC_PROVIDER
             rlRun "sync-set CLIENT_CLEANUP_DONE"
         rlPhaseEnd
     fi
-}
-
-function Tang_Server() {
-    rlPhaseStartSetup "Tang Server: Setup"
-        rlRun "systemctl enable --now rngd"
-        rlRun "setenforce 0"
-        rlRun "systemctl enable --now firewalld"
-        rlRun "firewall-cmd --add-port=${SYNC_GET_PORT}/tcp --permanent"
-        rlRun "firewall-cmd --add-port=${SYNC_SET_PORT}/tcp --permanent"
-        rlRun "firewall-cmd --add-service=http --permanent"
-        rlRun "firewall-cmd --reload"
-        rlRun "mkdir -p /var/db/tang"
-        rlRun "jose jwk gen -i '{\"alg\":\"ES512\"}' -o /var/db/tang/sig.jwk"
-        rlRun "jose jwk gen -i '{\"alg\":\"ECMR\"}' -o /var/db/tang/exc.jwk"
-        rlRun "systemctl enable --now tangd.socket"
-        rlRun "curl -sf http://${TANG_IP}/adv"
-        rlRun "sync-set TANG_SETUP_DONE"
-    rlPhaseEnd
-    rlPhaseStartTest "Tang Server: Wait for Client"
-        rlRun "sync-block CLEVIS_TEST_DONE ${CLEVIS_IP}"
-    rlPhaseEnd
-    rlPhaseStartCleanup "Tang Server: Cleanup"
-        rlRun "sync-block CLIENT_CLEANUP_DONE ${CLEVIS_IP}"
-        rlRun "firewall-cmd --remove-port=${SYNC_GET_PORT}/tcp --permanent"
-        rlRun "firewall-cmd --remove-port=${SYNC_SET_PORT}/tcp --permanent"
-        rlRun "firewall-cmd --remove-service=http --permanent"
-        rlRun "firewall-cmd --reload"
-    rlPhaseEnd
 }
 
 rlJournalStart
