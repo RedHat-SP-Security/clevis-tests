@@ -47,7 +47,6 @@ function get_IP() {
 
 function assign_roles() {
     if [ -n "${TMT_TOPOLOGY_BASH}" ] && [ -f "${TMT_TOPOLOGY_BASH}" ]; then
-        # shellcheck source=/dev/null
         . "${TMT_TOPOLOGY_BASH}"
         export CLEVIS=${TMT_GUESTS["client.hostname"]}
         export TANG=${TMT_GUESTS["server.hostname"]}
@@ -90,7 +89,6 @@ function Clevis_Client_Test() {
             SSS_CONFIG='{"t":1,"pins":{"tang":[{"url":"http://'"${TANG_IP}"'","adv":"'"${ADV_FILE}"'"}]}}'
             rlRun "clevis luks bind -f -d ${ENCRYPTED_FILE} sss '${SSS_CONFIG}'" <<< 'password'
 
-            # 🛠️ FIX: Create a custom systemd service instead of using /etc/crypttab
             rlLog "Creating custom systemd service for Clevis unlock"
             cat > /etc/systemd/system/clevis-test-unlock.service << EOF
 [Unit]
@@ -139,8 +137,6 @@ EOF
             
             rlRun "rm -f '${ENCRYPTED_FILE}' '${ADV_FILE}' '$COOKIE_CONFIG' '$COOKIE_INSTALL'"
             [ -f /etc/fstab ] && rlRun "sed -i '\|${MOUNT_POINT}|d' /etc/fstab"
-            # Remove this line since we are no longer using crypttab
-            # [ -f /etc/crypttab ] && rlRun "sed -i '\|${LUKS_DEV_NAME}|d' /etc/crypttab"
             rlRun "rmdir ${MOUNT_POINT}" || rlLogInfo "Mount point directory already removed"
 
             unset SYNC_PROVIDER
@@ -165,9 +161,11 @@ function Tang_Server() {
         rlRun "curl -sf http://${TANG_IP}/adv"
         rlRun "sync-set TANG_SETUP_DONE"
     rlPhaseEnd
+
     rlPhaseStartTest "Tang Server: Wait for Client"
         rlRun "sync-block CLEVIS_TEST_DONE ${CLEVIS_IP}"
     rlPhaseEnd
+    
     rlPhaseStartCleanup "Tang Server: Cleanup"
         rlRun "sync-block CLIENT_CLEANUP_DONE ${CLEVIS_IP}"
         rlRun "firewall-cmd --remove-port=${SYNC_GET_PORT}/tcp --permanent"
