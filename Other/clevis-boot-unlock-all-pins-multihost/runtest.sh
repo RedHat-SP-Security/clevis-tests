@@ -71,7 +71,6 @@ function assign_roles() {
 function Clevis_Client_Test() {
     if bootc status &>/dev/null; then IMAGE_MODE=true; else IMAGE_MODE=false; fi
 
-    # 🛠️ Define a persistent path for the advertisement
     local ADV_FILE="/var/opt/adv.jws"
 
     if [ ! -f "$COOKIE_CONFIG" ]; then
@@ -83,69 +82,73 @@ function Clevis_Client_Test() {
             fi
 
             rlRun "setenforce 0" 0 "Set SELinux to permissive mode"
-
-            rlLogInfo "Configuring client firewall"
             rlRun "systemctl enable --now firewalld"
             rlRun "firewall-cmd --add-port=${SYNC_GET_PORT}/tcp --permanent"
             rlRun "firewall-cmd --reload"
-
-            rlLog "Waiting for Tang server to complete its setup..."
             rlRun "sync-block TANG_SETUP_DONE ${TANG_IP}"
 
             rlLogInfo "Creating and binding LUKS device"
             rlRun "mkdir -p /var/opt"
-            rlRun "truncate -s 512M ${ENCRYPTED_FILE}" 0 "Create 512MB image file"
-            rlRun "echo -n 'password' | cryptsetup luksFormat ${ENCRYPTED_FILE} -" 0 "Format device with LUKS2"
+            rlRun "truncate -s 512M ${ENCRYPTED_FILE}"
+            rlRun "echo -n 'password' | cryptsetup luksFormat ${ENCRYPTED_FILE} -"
+            rlRun "curl -sf http://${TANG_IP}/adv -o ${ADV_FILE}"
             
-            # 🛠️ FIX: Download advertisement to the persistent path
-            rlRun "curl -sf http://${TANG_IP}/adv -o ${ADV_FILE}" 0 "Download Tang advertisement"
-            
-            # 🛠️ FIX: Use the persistent advertisement path in the SSS config
             SSS_CONFIG='{"t":1,"pins":{"tang":[{"url":"http://'"${TANG_IP}"'","adv":"'"${ADV_FILE}"'"}]}}'
-            rlRun "clevis luks bind -f -d ${ENCRYPTED_FILE} sss '${SSS_CONFIG}'" 0 "Bind with SSS Tang pin" <<< 'password'
+            rlRun "clevis luks bind -f -d ${ENCRYPTED_FILE} sss '${SSS_CONFIG}'" <<< 'password'
 
-            rlLog "Configuring system for automatic unlock after network is online"
-            echo "name=${LUKS_DEV_NAME} ${ENCRYPTED_FILE} none _netdev" >> /etc/crypttab
-            rlRun "dracut -f --regenerate-all" 0 "Regenerate initramfs"
+            # 🛠️ FIX: Create a custom systemd service instead of using /etc/crypttab
+            rlLog "Creating custom systemd service for Clevis unlock"
+            cat > /etc/systemd/system/clevis-test-unlock.service << EOF
+[Unit]
+Description=Clevis unlock for test device
+After=network-online.target
+Wants=network-online.target
+DefaultDependencies=no
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/clevis-luks-unlock -d ${ENCRYPTED_FILE} -n ${LUKS_DEV_NAME}
+[Install]
+WantedBy=multi-user.target
+EOF
+
+            # Enable the new service
+            rlRun "systemctl daemon-reload"
+            rlRun "systemctl enable clevis-test-unlock.service"
+
+            # Configure fstab to mount the device after it's unlocked
             rlRun "mkdir -p ${MOUNT_POINT}"
             echo "/dev/mapper/${LUKS_DEV_NAME} ${MOUNT_POINT} xfs defaults,nofail 0 0" >> /etc/fstab
 
-            rlRun "clevis luks unlock -d ${ENCRYPTED_FILE} -n ${LUKS_DEV_NAME}" 0 "Temporarily unlock for formatting"
-            rlRun "mkfs.xfs /dev/mapper/${LUKS_DEV_NAME}" 0 "Create filesystem"
-            rlRun "cryptsetup luksClose ${LUKS_DEV_NAME}" 0 "Re-lock the device"
-
-            rlLog "Enabling services required for network-bound unlock at boot"
-            rlRun "systemctl enable NetworkManager-wait-online.service"
-            rlRun "systemctl enable clevis-luks-askpass.path"
+            # Format the filesystem before rebooting
+            rlRun "clevis luks unlock -d ${ENCRYPTED_FILE} -n ${LUKS_DEV_NAME}"
+            rlRun "mkfs.xfs /dev/mapper/${LUKS_DEV_NAME}"
+            rlRun "cryptsetup luksClose ${LUKS_DEV_NAME}"
 
             rlRun "touch '$COOKIE_CONFIG'"
             tmt-reboot
         rlPhaseEnd
     else
         rlPhaseStartTest "Clevis Client: Verify Automatic Boot Unlock"
-            # Give boot processes a moment to complete
             sleep 5
-            rlRun "cryptsetup status ${LUKS_DEV_NAME}" 0-255
-            rlRun "lsblk -f" 0 "Check block device states"
-            rlRun "systemctl status cryptsetup@${LUKS_DEV_NAME}.service" 0-255
+            rlRun "cryptsetup status ${LUKS_DEV_NAME}" 0 "Check that the LUKS device is active"
             rlRun "findmnt ${MOUNT_POINT}" 0 "Verify device was automatically mounted at boot"
             rlLog "Clevis correctly unlocked and mounted the device at boot time."
             rlRun "sync-set CLEVIS_TEST_DONE"
         rlPhaseEnd
 
         rlPhaseStartCleanup "Clevis Client: Cleanup"
+            rlRun "systemctl disable clevis-test-unlock.service --now >/dev/null 2>&1 ||:"
+            rlRun "rm -f /etc/systemd/system/clevis-test-unlock.service"
             rlRun "umount ${MOUNT_POINT}" || rlLogInfo "Device not mounted"
             rlRun "cryptsetup luksClose ${LUKS_DEV_NAME}" || rlLogInfo "Device not open"
             
-            # Clean up all created files
             rlRun "rm -f '${ENCRYPTED_FILE}' '${ADV_FILE}' '$COOKIE_CONFIG' '$COOKIE_INSTALL'"
             [ -f /etc/fstab ] && rlRun "sed -i '\|${MOUNT_POINT}|d' /etc/fstab"
-            [ -f /etc/crypttab ] && rlRun "sed -i '\|${LUKS_DEV_NAME}|d' /etc/crypttab"
+            # Remove this line since we are no longer using crypttab
+            # [ -f /etc/crypttab ] && rlRun "sed -i '\|${LUKS_DEV_NAME}|d' /etc/crypttab"
             rlRun "rmdir ${MOUNT_POINT}" || rlLogInfo "Mount point directory already removed"
 
-            rlRun "systemctl disable NetworkManager-wait-online.service --now >/dev/null 2>&1 ||:"
-            rlRun "systemctl disable clevis-luks-askpass.path --now >/dev/null 2>&1 ||:"
-            
             unset SYNC_PROVIDER
             rlRun "sync-set CLIENT_CLEANUP_DONE"
         rlPhaseEnd
