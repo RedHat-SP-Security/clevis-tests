@@ -147,6 +147,34 @@ function Clevis_Client_Test() {
     fi
 }
 
+function Tang_Server() {
+    rlPhaseStartSetup "Tang Server: Setup"
+        rlRun "systemctl enable --now rngd"
+        rlRun "setenforce 0"
+        rlRun "systemctl enable --now firewalld"
+        rlRun "firewall-cmd --add-port=${SYNC_GET_PORT}/tcp --permanent"
+        rlRun "firewall-cmd --add-port=${SYNC_SET_PORT}/tcp --permanent"
+        rlRun "firewall-cmd --add-service=http --permanent"
+        rlRun "firewall-cmd --reload"
+        rlRun "mkdir -p /var/db/tang"
+        rlRun "jose jwk gen -i '{\"alg\":\"ES512\"}' -o /var/db/tang/sig.jwk"
+        rlRun "jose jwk gen -i '{\"alg\":\"ECMR\"}' -o /var/db/tang/exc.jwk"
+        rlRun "systemctl enable --now tangd.socket"
+        rlRun "curl -sf http://${TANG_IP}/adv"
+        rlRun "sync-set TANG_SETUP_DONE"
+    rlPhaseEnd
+    rlPhaseStartTest "Tang Server: Wait for Client"
+        rlRun "sync-block CLEVIS_TEST_DONE ${CLEVIS_IP}"
+    rlPhaseEnd
+    rlPhaseStartCleanup "Tang Server: Cleanup"
+        rlRun "sync-block CLIENT_CLEANUP_DONE ${CLEVIS_IP}"
+        rlRun "firewall-cmd --remove-port=${SYNC_GET_PORT}/tcp --permanent"
+        rlRun "firewall-cmd --remove-port=${SYNC_SET_PORT}/tcp --permanent"
+        rlRun "firewall-cmd --remove-service=http --permanent"
+        rlRun "firewall-cmd --reload"
+    rlPhaseEnd
+}
+
 rlJournalStart
     rlPhaseStartSetup "Global Setup"
         rlRun 'rlImport sync' || rlDie "cannot import sync"
