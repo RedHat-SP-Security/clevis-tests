@@ -105,7 +105,8 @@ function Clevis_Client_Test() {
             rlRun "clevis luks bind -f -d ${ENCRYPTED_FILE} sss '${SSS_CONFIG}'" 0 "Bind with SSS Tang pin" <<< 'password'
 
             rlLog "Configuring system for automatic unlock after network is online"
-            echo "${LUKS_DEV_NAME} ${ENCRYPTED_FILE} none _netdev" >> /etc/crypttab
+            echo "name=${LUKS_DEV_NAME} ${ENCRYPTED_FILE} none _netdev" >> /etc/crypttab
+            rlRun "dracut -f --regenerate-all" 0 "Regenerate initramfs"
             rlRun "mkdir -p ${MOUNT_POINT}"
             echo "/dev/mapper/${LUKS_DEV_NAME} ${MOUNT_POINT} xfs defaults,nofail 0 0" >> /etc/fstab
 
@@ -124,6 +125,9 @@ function Clevis_Client_Test() {
         rlPhaseStartTest "Clevis Client: Verify Automatic Boot Unlock"
             # Give boot processes a moment to complete
             sleep 5
+            rlRun "cryptsetup status ${LUKS_DEV_NAME}" 0-255
+            rlRun "lsblk -f" 0 "Check block device states"
+            rlRun "systemctl status cryptsetup@${LUKS_DEV_NAME}.service" 0-255
             rlRun "findmnt ${MOUNT_POINT}" 0 "Verify device was automatically mounted at boot"
             rlLog "Clevis correctly unlocked and mounted the device at boot time."
             rlRun "sync-set CLEVIS_TEST_DONE"
