@@ -86,24 +86,23 @@ function Clevis_Client_Test() {
             rlRun "firewall-cmd --add-port=${SYNC_GET_PORT}/tcp --permanent"
             rlRun "firewall-cmd --reload"
 
+            # 🛠️ FIX 1: Wait for the Tang server to be ready before contacting it.
+            rlLog "Waiting for Tang server to complete its setup..."
+            rlRun "sync-block TANG_SETUP_DONE ${TANG_IP}"
+
             rlLogInfo "Creating and binding LUKS device"
             rlRun "mkdir -p /var/opt"
             rlRun "truncate -s 512M ${ENCRYPTED_FILE}" 0 "Create 512MB image file"
             rlRun "echo -n 'password' | cryptsetup luksFormat ${ENCRYPTED_FILE} -" 0 "Format device with LUKS2"
+            
+            # This curl command will now reliably succeed.
             rlRun "curl -sf http://${TANG_IP}/adv -o /tmp/adv.jws" 0 "Download Tang advertisement"
             
-            # ✨ ENHANCEMENT: Add TPM2 pin to make the test more robust and closer to the original
-            if [ -e /dev/tpmrm0 ] || [ -e /dev/tpm0 ]; then
-                rlLog "TPM device found, binding with Tang and TPM2 (t=1)."
-                SSS_CONFIG='{"t":1,"pins":{"tang":[{"url":"http://'"${TANG_IP}"'","adv":"/tmp/adv.jws"}],"tpm2":{}}}'
-            else
-                rlLog "TPM device not found, binding with Tang only."
-                SSS_CONFIG='{"t":1,"pins":{"tang":[{"url":"http://'"${TANG_IP}"'","adv":"/tmp/adv.jws"}]}}'
-            fi
-            rlRun "clevis luks bind -f -d ${ENCRYPTED_FILE} sss '${SSS_CONFIG}'" 0 "Bind with SSS pins" <<< 'password'
+            # Reverting to your original SSS configuration
+            SSS_CONFIG='{"t":1,"pins":{"tang":[{"url":"http://'"${TANG_IP}"'","adv":"/tmp/adv.jws"}]}}'
+            rlRun "clevis luks bind -f -d ${ENCRYPTED_FILE} sss '${SSS_CONFIG}'" 0 "Bind with SSS Tang pin" <<< 'password'
 
-
-            rlLog "Configuring system for automatic unlock"
+            rlLog "Configuring system for automatic unlock after network is online"
             echo "${LUKS_DEV_NAME} ${ENCRYPTED_FILE} none _netdev" >> /etc/crypttab
             rlRun "mkdir -p ${MOUNT_POINT}"
             echo "/dev/mapper/${LUKS_DEV_NAME} ${MOUNT_POINT} xfs defaults,nofail 0 0" >> /etc/fstab
@@ -112,7 +111,7 @@ function Clevis_Client_Test() {
             rlRun "mkfs.xfs /dev/mapper/${LUKS_DEV_NAME}" 0 "Create filesystem"
             rlRun "cryptsetup luksClose ${LUKS_DEV_NAME}" 0 "Re-lock the device"
 
-            # 🛠️ FIX: Enable necessary services for boot-time unlock
+            # 🛠️ FIX 2: Enable necessary services for boot-time unlock after reboot.
             rlLog "Enabling services required for network-bound unlock at boot"
             rlRun "systemctl enable NetworkManager-wait-online.service"
             rlRun "systemctl enable clevis-luks-askpass.path"
@@ -122,6 +121,7 @@ function Clevis_Client_Test() {
         rlPhaseEnd
     else
         rlPhaseStartTest "Clevis Client: Verify Automatic Boot Unlock"
+            # The test succeeds if the device was automatically unlocked and mounted by the system.
             rlRun "findmnt ${MOUNT_POINT}" 0 "Verify device was automatically mounted at boot"
             rlLog "Clevis correctly unlocked and mounted the device at boot time."
             rlRun "sync-set CLEVIS_TEST_DONE"
@@ -131,15 +131,16 @@ function Clevis_Client_Test() {
             rlRun "umount ${MOUNT_POINT}" || rlLogInfo "Device not mounted"
             rlRun "cryptsetup luksClose ${LUKS_DEV_NAME}" || rlLogInfo "Device not open"
             
+            # Clean up the configuration files
             rlRun "rm -f '${ENCRYPTED_FILE}' '$COOKIE_CONFIG' '$COOKIE_INSTALL' /tmp/adv.jws"
             [ -f /etc/fstab ] && rlRun "sed -i '\|${MOUNT_POINT}|d' /etc/fstab"
             [ -f /etc/crypttab ] && rlRun "sed -i '\|${LUKS_DEV_NAME}|d' /etc/crypttab"
             rlRun "rmdir ${MOUNT_POINT}" || rlLogInfo "Mount point directory already removed"
-            
-            # Disable the services enabled during setup
-            rlRun "systemctl disable NetworkManager-wait-online.service"
-            rlRun "systemctl disable clevis-luks-askpass.path"
 
+            # It's good practice to disable services enabled during the test
+            rlRun "systemctl disable NetworkManager-wait-online.service --now >/dev/null 2>&1 ||:"
+            rlRun "systemctl disable clevis-luks-askpass.path --now >/dev/null 2>&1 ||:"
+            
             unset SYNC_PROVIDER
             rlRun "sync-set CLIENT_CLEANUP_DONE"
         rlPhaseEnd
