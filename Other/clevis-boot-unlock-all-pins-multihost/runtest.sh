@@ -71,6 +71,9 @@ function assign_roles() {
 function Clevis_Client_Test() {
     if bootc status &>/dev/null; then IMAGE_MODE=true; else IMAGE_MODE=false; fi
 
+    # 🛠️ Define a persistent path for the advertisement
+    local ADV_FILE="/var/opt/adv.jws"
+
     if [ ! -f "$COOKIE_CONFIG" ]; then
         rlPhaseStartSetup "Clevis Client: Initial Setup"
             if $IMAGE_MODE && [ ! -f "$COOKIE_INSTALL" ]; then
@@ -86,7 +89,6 @@ function Clevis_Client_Test() {
             rlRun "firewall-cmd --add-port=${SYNC_GET_PORT}/tcp --permanent"
             rlRun "firewall-cmd --reload"
 
-            # 🛠️ FIX 1: Wait for the Tang server to be ready before contacting it.
             rlLog "Waiting for Tang server to complete its setup..."
             rlRun "sync-block TANG_SETUP_DONE ${TANG_IP}"
 
@@ -95,11 +97,11 @@ function Clevis_Client_Test() {
             rlRun "truncate -s 512M ${ENCRYPTED_FILE}" 0 "Create 512MB image file"
             rlRun "echo -n 'password' | cryptsetup luksFormat ${ENCRYPTED_FILE} -" 0 "Format device with LUKS2"
             
-            # This curl command will now reliably succeed.
-            rlRun "curl -sf http://${TANG_IP}/adv -o /tmp/adv.jws" 0 "Download Tang advertisement"
+            # 🛠️ FIX: Download advertisement to the persistent path
+            rlRun "curl -sf http://${TANG_IP}/adv -o ${ADV_FILE}" 0 "Download Tang advertisement"
             
-            # Reverting to your original SSS configuration
-            SSS_CONFIG='{"t":1,"pins":{"tang":[{"url":"http://'"${TANG_IP}"'","adv":"/tmp/adv.jws"}]}}'
+            # 🛠️ FIX: Use the persistent advertisement path in the SSS config
+            SSS_CONFIG='{"t":1,"pins":{"tang":[{"url":"http://'"${TANG_IP}"'","adv":"'"${ADV_FILE}"'"}]}}'
             rlRun "clevis luks bind -f -d ${ENCRYPTED_FILE} sss '${SSS_CONFIG}'" 0 "Bind with SSS Tang pin" <<< 'password'
 
             rlLog "Configuring system for automatic unlock after network is online"
@@ -111,7 +113,6 @@ function Clevis_Client_Test() {
             rlRun "mkfs.xfs /dev/mapper/${LUKS_DEV_NAME}" 0 "Create filesystem"
             rlRun "cryptsetup luksClose ${LUKS_DEV_NAME}" 0 "Re-lock the device"
 
-            # 🛠️ FIX 2: Enable necessary services for boot-time unlock after reboot.
             rlLog "Enabling services required for network-bound unlock at boot"
             rlRun "systemctl enable NetworkManager-wait-online.service"
             rlRun "systemctl enable clevis-luks-askpass.path"
@@ -121,7 +122,8 @@ function Clevis_Client_Test() {
         rlPhaseEnd
     else
         rlPhaseStartTest "Clevis Client: Verify Automatic Boot Unlock"
-            # The test succeeds if the device was automatically unlocked and mounted by the system.
+            # Give boot processes a moment to complete
+            sleep 5
             rlRun "findmnt ${MOUNT_POINT}" 0 "Verify device was automatically mounted at boot"
             rlLog "Clevis correctly unlocked and mounted the device at boot time."
             rlRun "sync-set CLEVIS_TEST_DONE"
@@ -131,13 +133,12 @@ function Clevis_Client_Test() {
             rlRun "umount ${MOUNT_POINT}" || rlLogInfo "Device not mounted"
             rlRun "cryptsetup luksClose ${LUKS_DEV_NAME}" || rlLogInfo "Device not open"
             
-            # Clean up the configuration files
-            rlRun "rm -f '${ENCRYPTED_FILE}' '$COOKIE_CONFIG' '$COOKIE_INSTALL' /tmp/adv.jws"
+            # Clean up all created files
+            rlRun "rm -f '${ENCRYPTED_FILE}' '${ADV_FILE}' '$COOKIE_CONFIG' '$COOKIE_INSTALL'"
             [ -f /etc/fstab ] && rlRun "sed -i '\|${MOUNT_POINT}|d' /etc/fstab"
             [ -f /etc/crypttab ] && rlRun "sed -i '\|${LUKS_DEV_NAME}|d' /etc/crypttab"
             rlRun "rmdir ${MOUNT_POINT}" || rlLogInfo "Mount point directory already removed"
 
-            # It's good practice to disable services enabled during the test
             rlRun "systemctl disable NetworkManager-wait-online.service --now >/dev/null 2>&1 ||:"
             rlRun "systemctl disable clevis-luks-askpass.path --now >/dev/null 2>&1 ||:"
             
