@@ -75,12 +75,6 @@ function Clevis_Client_Test() {
 
     if [ ! -f "$COOKIE_CONFIG" ]; then
         rlPhaseStartSetup "Clevis Client: Initial Setup"
-            if $IMAGE_MODE && [ ! -f "$COOKIE_INSTALL" ]; then
-                rlLog "Image Mode - Phase 1: Installing packages. Rebooting to apply."
-                rlRun "touch $COOKIE_INSTALL"
-                tmt-reboot
-            fi
-
             rlRun "setenforce 0" 0 "Set SELinux to permissive mode"
             rlRun "systemctl enable --now firewalld"
             rlRun "firewall-cmd --add-port=${SYNC_GET_PORT}/tcp --permanent"
