@@ -1,5 +1,5 @@
-summary: Test the 'clevis luks pass' subcommand with the device and slot as a parameter
-    and check the passphrase used to bind that particular slot.
+summary: Test the 'clevis luks pass' subcommand with the device and slot as a 
+    parameter and check the passphrase used to bind that particular slot.
 test: ./runtest.sh
 recommend:
   - clevis
@@ -31,3 +31,4 @@ adjust:
   - enabled: false
     when: distro ~< rhel-8.2
     continue: false
+id: d79ad730-bb1b-4b3e-a1a5-c87dccce88d0

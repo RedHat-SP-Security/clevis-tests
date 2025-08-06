@@ -1,4 +1,5 @@
-summary: tests tang pin with a 3-way hybrid TLS setup using Nginx and a socat-wrapped tangd.
+summary: tests tang pin with a 3-way hybrid TLS setup using Nginx and a 
+    socat-wrapped tangd.
 component:
   - tang
   - clevis
@@ -26,4 +27,4 @@ adjust:
   - enabled: false
     when: distro < rhel-10.1 or distro < fedora-43
     because: PQC is available from this version of OS
-
+id: 0864b1eb-8fbd-4696-8022-16da3966aba8

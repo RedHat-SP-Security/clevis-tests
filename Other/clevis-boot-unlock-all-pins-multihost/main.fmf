@@ -1,7 +1,6 @@
 summary: Multihost Clevis and Tang functionality test
 description: |
-  Test of clevis boot unlock via all possible pins (tang, tpm2) and using sss in Image Mode.
-
+    Test of clevis boot unlock via all possible pins (tang, tpm2) and using sss in Image Mode.
 contact: Adam Prikryl <aprikryl@redhat.com>
 test: ./runtest.sh
 require+:
@@ -21,5 +20,5 @@ adjust:
   - enabled: false
     when: distro < rhel-9
     continue: false
-
 duration: 2h
+id: 00d6f250-7d2a-4e1e-9314-bf634c707978

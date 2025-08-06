@@ -33,9 +33,11 @@ adjust:
 /ecdsa:
     environment:
         CRYPTO_ALG: ECDSA
+    id: ea690dbf-d31b-4f4b-b70b-90467d420850
 /rsa:
     environment:
         CRYPTO_ALG: RSA
+    id: cbfdd381-61e9-4174-90f3-46170f7a1511
 /pqc_alg:
     environment:
         CRYPTO_ALG: ML-DSA-65
@@ -44,3 +46,4 @@ adjust:
       - enabled: false
         when: distro < rhel-10.1 or distro < fedora-43
         because: PQC is available from this version of OS
+    id: 91217887-b3e2-42de-826b-dd674636a48f
