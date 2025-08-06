@@ -2,19 +2,20 @@ summary: verify correct file ownership
 description: verifies if important clevis files have correct ownership
 contact: Patrik Koncity <pkoncity@redhat.com>
 component:
-- tang
+  - tang
 test: ./runtest.sh
 framework: beakerlib
 recommend:
-- clevis
-- clevis-pin-tpm2
+  - clevis
+  - clevis-pin-tpm2
 duration: 5m
 enabled: true
 tag:
-- CI-Tier-1
-- Tier1
+  - CI-Tier-1
+  - Tier1
 tier: '1'
 adjust:
--   enabled: false
+  - enabled: false
     when: distro == rhel-4, rhel-5, rhel-6, rhel-7, rhel-8
     continue: false
+id: 9c6eaf18-331f-4398-ac83-51a298d36de5

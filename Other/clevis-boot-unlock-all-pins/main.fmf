@@ -1,4 +1,5 @@
-summary: Test of clevis boot unlock via all possible pins (tang, tpm2) and using sss.
+summary: Test of clevis boot unlock via all possible pins (tang, tpm2) and using
+    sss.
 contact: Patrik Koncity <pkoncity@redhat.com>
 test: ./runtest.sh
 require:
@@ -23,9 +24,11 @@ adjust:
 /ecdsa:
     environment:
         CRYPTO_ALG: ECDSA
+    id: 273793a4-0378-4552-b183-ead6252e1f98
 /rsa:
     environment:
         CRYPTO_ALG: RSA
+    id: 368fc544-21a6-444c-b956-433363d48b76
 /pqc_alg:
     environment:
         CRYPTO_ALG: ML-DSA-65
@@ -34,3 +37,4 @@ adjust:
       - enabled: false
         when: distro < rhel-10.1 or distro < fedora-43
         because: PQC is available from this version of OS
+    id: 8fcbde9b-5643-4b16-aa89-25b81d1a4ba4

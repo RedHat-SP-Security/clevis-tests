@@ -1,4 +1,5 @@
-summary: tests the clevis pkcs#11 luks functionality using a single encrypted disk
+summary: tests the clevis pkcs#11 luks functionality using a single encrypted 
+    disk
 component:
   - clevis
 test: ./runtest.sh
@@ -31,11 +32,12 @@ tag:
   - TierCandidatesFAIL
 extra-summary: /CoreOS/clevis/Sanity/pkcs11/single-encrypted-disk
 extra-task: /CoreOS/clevis/Sanity/pkcs11/single-encrypted-disk
-#extra-nitrate: TC#0XXXXX
 adjust:
   - enabled: false
     when: distro == rhel-4, rhel-5, rhel-6, rhel-7, rhel-8
     continue: false
   - when: kickstart_pkcs11 is not defined or kickstart_pkcs11 == false
     enabled: false
-    because: This tests works only with provisioned kickstart file in plan and minimal hardware reqs.
+    because: This tests works only with provisioned kickstart file in plan and 
+        minimal hardware reqs.
+id: 6330df52-a762-4675-8799-524292290a8a

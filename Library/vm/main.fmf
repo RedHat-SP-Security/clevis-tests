@@ -1,5 +1,5 @@
 summary: vm
-description: 'provides helper shell functions for testing with VMs'
+description: provides helper shell functions for testing with VMs
 contact: Sergio Correia <scorreia@redhat.com>
 test: ./test.sh
 framework: beakerlib
@@ -8,6 +8,7 @@ recommend:
 duration: 10m
 enabled: true
 adjust:
--   enabled: false
+  - enabled: false
     when: distro == rhel-4, rhel-5, rhel-6, rhel-7
     continue: false
+id: 69bced54-2a0b-4633-9a1a-b9d6539ada26

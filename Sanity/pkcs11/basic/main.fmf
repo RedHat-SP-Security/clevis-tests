@@ -37,8 +37,8 @@ tag:
 tier: '1'
 extra-summary: /CoreOS/clevis/Sanity/pkcs11/basic
 extra-task: /CoreOS/clevis/Sanity/pkcs11/basic
-#extra-nitrate: TC#0XXXXX
 adjust:
   - enabled: false
     when: distro == rhel-4, rhel-5, rhel-6, rhel-7, rhel-8
     continue: false
+id: 335052c7-104e-4550-b835-8fb448dddcc0

@@ -31,7 +31,6 @@ tag:
   - TierCandidatesFAIL
 extra-summary: /CoreOS/clevis/Sanity/pkcs11/luks
 extra-task: /CoreOS/clevis/Sanity/pkcs11/luks
-#extra-nitrate: TC#0XXXXX
 adjust:
   - enabled: false
     when: distro == rhel-4, rhel-5, rhel-6, rhel-7, rhel-8
@@ -39,3 +38,4 @@ adjust:
   - enabled: false
     when: hwtpm != true
     continue: false
+id: 5f0170e6-9889-434b-aeb3-bee27fcf83a7

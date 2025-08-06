@@ -1,5 +1,5 @@
-summary: This test validates the newly added -y (assume-yes) parameter that helps
-    automate clevis luks bind
+summary: This test validates the newly added -y (assume-yes) parameter that 
+    helps automate clevis luks bind
 test: ./runtest.sh
 recommend:
   - clevis
@@ -28,3 +28,4 @@ adjust:
   - enabled: false
     when: distro == rhel-alt-7
     continue: false
+id: 36079645-a946-4aa4-badd-58c1ac456495
