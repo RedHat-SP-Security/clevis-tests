@@ -15,7 +15,7 @@ require+:
     name: /Library/sync
     type: library
 tag:
-  - ImageMode
+  - ImageModeMultihost
 adjust:
   - enabled: false
     when: distro < rhel-9
