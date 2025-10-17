@@ -46,7 +46,7 @@ rlJournalStart
 
         rlRun "dd if=/dev/zero of=loopfile bs=100M count=1"
         rlRun "lodev=\$(losetup -f --show loopfile)" 0 "Create device from file"
-        rlRun "echo -n redhat123 | cryptsetup luksFormat --batch-mode --key-file - ${lodev}"
+        rlRun "echo -n redhat123 | cryptsetup luksFormat --batch-mode --key-file - --pbkdf-memory 65536 ${lodev}"
 
         rlRun "rlServiceStart tangd.socket"
     rlPhaseEnd
