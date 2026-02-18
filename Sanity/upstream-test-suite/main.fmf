@@ -7,6 +7,7 @@ recommend:
   - gawk
   - grep
   - patch
+  - lsof
 duration: 10m
 enabled: true
 tag:
