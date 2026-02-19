@@ -45,6 +45,16 @@ function get_IP() {
     fi
 }
 
+# Wrap IPv6 addresses in brackets for use in URLs
+function format_ip_for_url() {
+    local ip="$1"
+    if echo "$ip" | grep -q ':'; then
+        echo "[$ip]"
+    else
+        echo "$ip"
+    fi
+}
+
 function assign_roles() {
     if [ -n "${TMT_TOPOLOGY_BASH}" ] && [ -f "${TMT_TOPOLOGY_BASH}" ]; then
         . "${TMT_TOPOLOGY_BASH}"
@@ -84,9 +94,11 @@ function Clevis_Client_Test() {
             rlRun "mkdir -p /var/opt"
             rlRun "truncate -s 512M ${ENCRYPTED_FILE}"
             rlRun "echo -n 'password' | cryptsetup luksFormat ${ENCRYPTED_FILE} -"
-            rlRun "curl -sf http://${TANG_IP}/adv -o ${ADV_FILE}"
-            
-            SSS_CONFIG='{"t":1,"pins":{"tang":[{"url":"http://'"${TANG_IP}"'","adv":"'"${ADV_FILE}"'"}]}}'
+            local TANG_URL_IP
+            TANG_URL_IP=$(format_ip_for_url "${TANG_IP}")
+            rlRun "curl -sf http://${TANG_URL_IP}/adv -o ${ADV_FILE}"
+
+            SSS_CONFIG='{"t":1,"pins":{"tang":[{"url":"http://'"${TANG_URL_IP}"'","adv":"'"${ADV_FILE}"'"}]}}'
             rlRun "clevis luks bind -f -d ${ENCRYPTED_FILE} sss '${SSS_CONFIG}'" <<< 'password'
 
             rlLog "Creating custom systemd service for Clevis unlock"
@@ -99,7 +111,9 @@ DefaultDependencies=no
 [Service]
 Type=oneshot
 RemainAfterExit=yes
+TimeoutStartSec=180
 ExecStart=/usr/bin/clevis-luks-unlock -d ${ENCRYPTED_FILE} -n ${LUKS_DEV_NAME}
+ExecStartPost=/bin/mount ${MOUNT_POINT}
 [Install]
 WantedBy=multi-user.target
 EOF
@@ -147,7 +161,7 @@ EOF
 
 function Tang_Server() {
     rlPhaseStartSetup "Tang Server: Setup"
-        rlRun "systemctl enable --now rngd"
+        rlRun "systemctl enable --now rngd" 0,1
         rlRun "setenforce 0"
         rlRun "systemctl enable --now firewalld"
         rlRun "firewall-cmd --add-port=${SYNC_GET_PORT}/tcp --permanent"
@@ -158,7 +172,7 @@ function Tang_Server() {
         rlRun "jose jwk gen -i '{\"alg\":\"ES512\"}' -o /var/db/tang/sig.jwk"
         rlRun "jose jwk gen -i '{\"alg\":\"ECMR\"}' -o /var/db/tang/exc.jwk"
         rlRun "systemctl enable --now tangd.socket"
-        rlRun "curl -sf http://${TANG_IP}/adv"
+        rlRun "curl -sf http://$(format_ip_for_url ${TANG_IP})/adv"
         rlRun "sync-set TANG_SETUP_DONE"
     rlPhaseEnd
 
