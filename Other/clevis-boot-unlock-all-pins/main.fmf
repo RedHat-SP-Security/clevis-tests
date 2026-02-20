@@ -9,7 +9,7 @@ require:
     url: https://github.com/RedHat-SP-Security/clevis-tests
     type: library
   - socat
-duration: 2h
+duration: 3h
 enabled: true
 tag:
   - NoTier
