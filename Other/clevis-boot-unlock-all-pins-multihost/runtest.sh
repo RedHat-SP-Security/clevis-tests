@@ -147,8 +147,10 @@ EOF
             rlRun "systemctl disable clevis-test-unlock.service --now >/dev/null 2>&1 ||:"
             rlRun "rm -f /etc/systemd/system/clevis-test-unlock.service"
             rlRun "umount ${MOUNT_POINT}" || rlLogInfo "Device not mounted"
+            rlRun "sync"
+            sleep 1
             rlRun "cryptsetup luksClose ${LUKS_DEV_NAME}" || rlLogInfo "Device not open"
-            
+
             rlRun "rm -f '${ENCRYPTED_FILE}' '${ADV_FILE}' '$COOKIE_CONFIG' '$COOKIE_INSTALL'"
             [ -f /etc/fstab ] && rlRun "sed -i '\|${MOUNT_POINT}|d' /etc/fstab"
             rlRun "rmdir ${MOUNT_POINT}" || rlLogInfo "Mount point directory already removed"
