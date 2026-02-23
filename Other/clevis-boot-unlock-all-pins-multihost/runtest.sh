@@ -154,7 +154,16 @@ EOF
             rlRun "systemctl daemon-reload"
 
             rlRun "umount ${MOUNT_POINT}" || rlLogInfo "Device not mounted"
-            rlRun "udevadm settle"
+
+            # On RHEL-10+, processes (e.g. systemd-udevd workers) may hold
+            # the dm device open after unmount.  Log what is holding it, kill
+            # the holders, then close the LUKS device.
+            if [ -e "/dev/mapper/${LUKS_DEV_NAME}" ]; then
+                rlRun "fuser -v /dev/mapper/${LUKS_DEV_NAME} 2>&1 ||:" 0-1 "Show device holders"
+                rlRun "fuser -km /dev/mapper/${LUKS_DEV_NAME} 2>/dev/null ||:" 0-1 "Kill device holders"
+                rlRun "udevadm settle"
+                sleep 1
+            fi
             rlRun "cryptsetup luksClose ${LUKS_DEV_NAME}" || rlLogInfo "Device not open"
 
             rlRun "rm -f '${ENCRYPTED_FILE}' '${ADV_FILE}' '$COOKIE_CONFIG' '$COOKIE_INSTALL'"
