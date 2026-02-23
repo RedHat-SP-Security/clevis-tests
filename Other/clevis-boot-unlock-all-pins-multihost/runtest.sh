@@ -146,18 +146,18 @@ EOF
         rlPhaseStartCleanup "Clevis Client: Cleanup"
             rlRun "systemctl disable clevis-test-unlock.service --now >/dev/null 2>&1 ||:"
             rlRun "rm -f /etc/systemd/system/clevis-test-unlock.service"
+
+            # Remove fstab entry and reload systemd BEFORE closing the device,
+            # otherwise systemd's auto-generated mount unit from fstab keeps
+            # a reference to the device mapper device, preventing luksClose.
+            [ -f /etc/fstab ] && rlRun "sed -i '\|${MOUNT_POINT}|d' /etc/fstab"
+            rlRun "systemctl daemon-reload"
+
             rlRun "umount ${MOUNT_POINT}" || rlLogInfo "Device not mounted"
             rlRun "udevadm settle"
-            local _retries
-            for _retries in 1 2 3 4 5; do
-                cryptsetup luksClose ${LUKS_DEV_NAME} 2>/dev/null && break
-                rlLogInfo "Device still in use, retrying (${_retries}/5)..."
-                sleep "${_retries}"
-            done
-            rlRun "cryptsetup luksClose ${LUKS_DEV_NAME} 2>/dev/null" 0-1 "Close LUKS device"
+            rlRun "cryptsetup luksClose ${LUKS_DEV_NAME}" || rlLogInfo "Device not open"
 
             rlRun "rm -f '${ENCRYPTED_FILE}' '${ADV_FILE}' '$COOKIE_CONFIG' '$COOKIE_INSTALL'"
-            [ -f /etc/fstab ] && rlRun "sed -i '\|${MOUNT_POINT}|d' /etc/fstab"
             rlRun "rmdir ${MOUNT_POINT} 2>/dev/null" 0-1 "Remove mount point"
 
             unset SYNC_PROVIDER
