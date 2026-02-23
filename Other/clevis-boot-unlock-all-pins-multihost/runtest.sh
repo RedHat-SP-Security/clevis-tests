@@ -113,7 +113,7 @@ Type=oneshot
 RemainAfterExit=yes
 TimeoutStartSec=180
 ExecStart=/usr/bin/clevis-luks-unlock -d ${ENCRYPTED_FILE} -n ${LUKS_DEV_NAME}
-ExecStartPost=/bin/mount ${MOUNT_POINT}
+ExecStartPost=/bin/bash -c 'mountpoint -q ${MOUNT_POINT} || mount ${MOUNT_POINT}'
 [Install]
 WantedBy=multi-user.target
 EOF
@@ -153,17 +153,11 @@ EOF
             [ -f /etc/fstab ] && rlRun "sed -i '\|${MOUNT_POINT}|d' /etc/fstab"
             rlRun "systemctl daemon-reload"
 
-            rlRun "umount ${MOUNT_POINT}" || rlLogInfo "Device not mounted"
-
-            # On RHEL-10+, processes (e.g. systemd-udevd workers) may hold
-            # the dm device open after unmount.  Log what is holding it, kill
-            # the holders, then close the LUKS device.
-            if [ -e "/dev/mapper/${LUKS_DEV_NAME}" ]; then
-                rlRun "fuser -v /dev/mapper/${LUKS_DEV_NAME} 2>&1 ||:" 0-1 "Show device holders"
-                rlRun "fuser -km /dev/mapper/${LUKS_DEV_NAME} 2>/dev/null ||:" 0-1 "Kill device holders"
-                rlRun "udevadm settle"
-                sleep 1
-            fi
+            # Unmount all layers — on RHEL-10+ both the systemd auto-generated
+            # mount unit and ExecStartPost may mount the device, resulting in
+            # a double mount that a single umount does not fully clear.
+            while umount ${MOUNT_POINT} 2>/dev/null; do :; done
+            rlRun "udevadm settle"
             rlRun "cryptsetup luksClose ${LUKS_DEV_NAME}" || rlLogInfo "Device not open"
 
             rlRun "rm -f '${ENCRYPTED_FILE}' '${ADV_FILE}' '$COOKIE_CONFIG' '$COOKIE_INSTALL'"
