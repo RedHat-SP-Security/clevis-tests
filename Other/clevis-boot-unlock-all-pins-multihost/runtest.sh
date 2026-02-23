@@ -161,7 +161,7 @@ EOF
 
 function Tang_Server() {
     rlPhaseStartSetup "Tang Server: Setup"
-        rlRun "systemctl enable --now rngd" 0,1
+        rlRun "systemctl enable --now rngd" 0-1
         rlRun "setenforce 0"
         rlRun "systemctl enable --now firewalld"
         rlRun "firewall-cmd --add-port=${SYNC_GET_PORT}/tcp --permanent"
@@ -172,7 +172,7 @@ function Tang_Server() {
         rlRun "jose jwk gen -i '{\"alg\":\"ES512\"}' -o /var/db/tang/sig.jwk"
         rlRun "jose jwk gen -i '{\"alg\":\"ECMR\"}' -o /var/db/tang/exc.jwk"
         rlRun "systemctl enable --now tangd.socket"
-        rlRun "curl -sf http://$(format_ip_for_url ${TANG_IP})/adv"
+        rlRun "curl -sf http://localhost/adv"
         rlRun "sync-set TANG_SETUP_DONE"
     rlPhaseEnd
 
