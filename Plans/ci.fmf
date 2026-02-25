@@ -70,3 +70,34 @@ execute:
           - how: shell
             script:
               - dnf install -y https://dl.fedoraproject.org/pub/epel/epel-release-latest-9.noarch.rpm https://dl.fedoraproject.org/pub/epel/epel-next-release-latest-9.noarch.rpm
+
+/image-mode:
+  discover:
+    - name: Image_mode_tests_clevis
+      how: fmf
+      filter: tag:ImageMode
+
+/virtualization:
+  context:
+    hwtpm: true
+  provision:
+    hardware:
+      virtualization:
+        is-supported: true
+      tpm:
+        version: "2"
+  discover:
+    - name: Nested_virtualization_boot_unlock_tests
+      how: fmf
+      filter: tag:NestedVirt
+
+/multihost:
+  provision:
+    - name: server
+      role: server
+    - name: client
+      role: client
+  discover:
+    - name: Multihost_clevis_tang_tests
+      how: fmf
+      filter: tag:ImageModeMultihost
