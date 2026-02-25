@@ -156,7 +156,16 @@ EOF
             # Unmount all layers — on RHEL-10+ both the systemd auto-generated
             # mount unit and ExecStartPost may mount the device, resulting in
             # a double mount that a single umount does not fully clear.
-            while umount ${MOUNT_POINT} 2>/dev/null; do :; done
+            local _unmount_attempts=0
+            while mountpoint -q "${MOUNT_POINT}" && [ "${_unmount_attempts}" -lt 10 ]; do
+                umount "${MOUNT_POINT}" 2>/dev/null || sleep 2
+                _unmount_attempts=$((_unmount_attempts + 1))
+            done
+            
+            # Verify unmount was successful before trying to close LUKS
+            if mountpoint -q "${MOUNT_POINT}"; then
+                rlFail "Failed to unmount ${MOUNT_POINT} after ${_unmount_attempts} attempts. Device is likely busy."
+            fi
             rlRun "udevadm settle"
             rlRun "cryptsetup luksClose ${LUKS_DEV_NAME}" || rlLogInfo "Device not open"
 
