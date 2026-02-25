@@ -1,0 +1,103 @@
+stages:
+ - test
+
+.testing-farm-base:
+ stage: test
+ image: quay.io/testing-farm/cli:latest
+ script:
+   - testing-farm request
+       --compose $COMPOSE
+       --git-url $CI_PROJECT_URL
+       --git-ref $CI_COMMIT_SHA
+       --plan-filter "name:$PLAN"
+ rules:
+   - changes:
+       - Plans/ci.fmf
+   - if: $CI_PIPELINE_SOURCE == "schedule"
+
+# Per-plan jobs with file-based triggers
+sanity:
+ extends: .testing-farm-base
+ variables:
+   PLAN: /Plans/ci/sanity
+ parallel:
+   matrix:
+     - COMPOSE: [Fedora-latest, CentOS-Stream-10, CentOS-Stream-9]
+ rules:
+   - changes:
+       - Sanity/**/*
+       - Regression/**/*
+       - Plans/ci.fmf
+   - if: $CI_PIPELINE_SOURCE == "schedule"
+
+image-mode:
+ extends: .testing-farm-base
+ variables:
+   PLAN: /Plans/ci/image-mode
+ parallel:
+   matrix:
+     - COMPOSE: [Fedora-latest, CentOS-Stream-10, CentOS-Stream-9]
+ rules:
+   - changes:
+       - Sanity/bind-luks/**/*
+       - Sanity/pin-tang/**/*
+       - Sanity/pin-sss/**/*
+       - Sanity/pkcs11/basic/**/*
+       - Sanity/tang-pin-TLS/**/*
+       - Sanity/simple-encrypt-pin-tang/**/*
+       - Sanity/sha256-thp/**/*
+       - Sanity/clevis-files-ownership/**/*
+       - Plans/ci.fmf
+   - if: $CI_PIPELINE_SOURCE == "schedule"
+
+pkcs11-luks:
+ extends: .testing-farm-base
+ variables:
+   PLAN: /Plans/ci/pkcs11-luks
+ parallel:
+   matrix:
+     - COMPOSE: [Fedora-latest, CentOS-Stream-10, CentOS-Stream-9]
+ rules:
+   - changes:
+       - Sanity/pkcs11/luks-tpm2/**/*
+       - Plans/ci.fmf
+   - if: $CI_PIPELINE_SOURCE == "schedule"
+
+pkcs11-single-encrypted-disk:
+ extends: .testing-farm-base
+ variables:
+   PLAN: /Plans/ci/pkcs11-single-encrypted-disk
+ parallel:
+   matrix:
+     - COMPOSE: [Fedora-latest, CentOS-Stream-10, CentOS-Stream-9]
+ rules:
+   - changes:
+       - Sanity/pkcs11/single-encrypted-disk/**/*
+       - Plans/ci.fmf
+   - if: $CI_PIPELINE_SOURCE == "schedule"
+
+
+virtualization:
+ extends: .testing-farm-base
+ variables:
+   PLAN: /Plans/ci/virtualization
+   COMPOSE: [CentOS-Stream-10, CentOS-Stream-9]
+ rules:
+   - changes:
+       - Other/clevis-boot-unlock-all-pins/**/*
+       - Library/vm/**/*
+       - Plans/ci.fmf
+   - if: $CI_PIPELINE_SOURCE == "schedule"
+
+multihost:
+ extends: .testing-farm-base
+ variables:
+   PLAN: /Plans/ci/multihost
+ parallel:
+   matrix:
+     - COMPOSE: [Fedora-latest, CentOS-Stream-10, CentOS-Stream-9]
+ rules:
+   - changes:
+       - Other/clevis-boot-unlock-all-pins-multihost/**/*
+       - Plans/ci.fmf
+   - if: $CI_PIPELINE_SOURCE == "schedule"
