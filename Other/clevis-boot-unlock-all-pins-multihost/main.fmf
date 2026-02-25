@@ -20,5 +20,5 @@ adjust:
   - enabled: false
     when: distro < rhel-9
     continue: false
-duration: 3h
+duration: 2h
 id: 00d6f250-7d2a-4e1e-9314-bf634c707978

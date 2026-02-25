@@ -55,14 +55,14 @@ export __INTERNAL_BOOT_TIMEOUT
 
 # Timeout to wait for VM to be provisioned.
 export __INTERNAL_PROVISIONING_TIMEOUT
-[ -n "${__INTERNAL_PROVISIONING_TIMEOUT}" ] || __INTERNAL_PROVISIONING_TIMEOUT=2400
+[ -n "${__INTERNAL_PROVISIONING_TIMEOUT}" ] || __INTERNAL_PROVISIONING_TIMEOUT=1800
 
 export __INTERNAL_SWAPFILE
 [ -n "${__INTERNAL_SWAPFILE}" ] || __INTERNAL_SWAPFILE=/vm-swapfile
 
 # Wait time before start checking for VMs provisioned/responding.
 export __INTERNAL_VM_WAIT_TIME
-[ -n "${__INTERNAL_VM_WAIT_TIME}" ] || __INTERNAL_VM_WAIT_TIME=20
+[ -n "${__INTERNAL_VM_WAIT_TIME}" ] || __INTERNAL_VM_WAIT_TIME=15
 
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 #   Functions
