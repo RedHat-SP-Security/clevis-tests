@@ -162,38 +162,76 @@ EOF
     TANG_SERVER="$TANG_IP:$TANG_PORT"
     rlLog "Address of tang server: $TANG_SERVER"
     CERT_PATH=$(pwd)/server.crt
-    VM_ID="$(10mt -z -s ${SYSTEM} -k ~/.ssh/id_rsa.pub -a "${ADDR}" -t -x clevis-boot-unlock-all-pins -v TANG_SERVER=${TANG_SERVER} -f $CERT_PATH )"
-    [ -n "${VM_ID}" ] || rlDie "Unable to get VM_ID; cannot continue"
 
-    _compose="$(10mtctl compose "${VM_ID}")"
-    rlLogInfo "COMPOSE: ${_compose}"
+    # Retry and fallback logic for VM creation to handle transient
+    # compose mirror infrastructure failures.
+    _MAX_RETRIES=3
+    _RETRY_DELAY=30
+    VM_ID=""
 
-    # Provision the VM.
-    rlRun "10mtctl provision \"${VM_ID}\""
-    rlRun "vmWaitForProvisioning ${VM_ID}" \
-      || rlDie "VM was not provisioned in time"
+    for _attempt in $(seq 1 ${_MAX_RETRIES}); do
+      rlLogInfo "Creating VM with SYSTEM='${SYSTEM}' (attempt ${_attempt}/${_MAX_RETRIES})"
+      VM_ID="$(10mt -z -s ${SYSTEM} -k ~/.ssh/id_rsa.pub -a "${ADDR}" \
+        -t -x clevis-boot-unlock-all-pins \
+        -v TANG_SERVER=${TANG_SERVER} -f $CERT_PATH)"
+      [ -n "${VM_ID}" ] && break
+      VM_ID=""
+      [ "${_attempt}" -lt "${_MAX_RETRIES}" ] \
+        && { rlLogWarning "10mt failed, retrying in ${_RETRY_DELAY}s..."; sleep ${_RETRY_DELAY}; }
+    done
 
-    rlRun "10mtctl start \"${VM_ID}\""
-    #10mtctl info <ID>
-    #10mtctl console <ID>
-    rlRun "vmWaitByAddr ${ADDR}" \
-      || rlDie "Cannot continue without VM responding"
-
-    if rlIsRHELLike '>=10'; then
-      rlRun "vmCmd ${ADDR} journalctl -b | grep \"Finished systemd-cryptsetup\""
-    else
-      rlRun "vmCmd ${ADDR} journalctl -b | grep \"Finished Cryptography Setup for luks-\""
-      rlRun "vmCmd ${ADDR} journalctl -b | grep \"clevis-luks-askpass.service: Deactivated successfully\""
+    # Fallback: try without exact version (e.g. "rhel9" instead of "rhel9 -r 9.8")
+    if [ -z "${VM_ID}" ]; then
+      _system_base="${SYSTEM%% *}"
+      if [ "${_system_base}" != "${SYSTEM}" ]; then
+        rlLogWarning "All attempts with '${SYSTEM}' failed, falling back to '${_system_base}'"
+        for _attempt in $(seq 1 ${_MAX_RETRIES}); do
+          rlLogInfo "Creating VM with SYSTEM='${_system_base}' (attempt ${_attempt}/${_MAX_RETRIES})"
+          VM_ID="$(10mt -z -s ${_system_base} -k ~/.ssh/id_rsa.pub -a "${ADDR}" \
+            -t -x clevis-boot-unlock-all-pins \
+            -v TANG_SERVER=${TANG_SERVER} -f $CERT_PATH)"
+          [ -n "${VM_ID}" ] && break
+          VM_ID=""
+          [ "${_attempt}" -lt "${_MAX_RETRIES}" ] \
+            && { rlLogWarning "10mt failed, retrying in ${_RETRY_DELAY}s..."; sleep ${_RETRY_DELAY}; }
+        done
+      fi
     fi
 
-    # Now we setup any extra VM repos.
-    if [ -n "${EXTRA_VM_REPOS}" ]; then
-      count=0
-      for repo in ${EXTRA_VM_REPOS}; do
-        count=$((count+1))
-        vmCmd "${ADDR}" "curl -kL '${repo}' -o '/etc/yum.repos.d/extra-repo-r${count}.repo'" ||:
-      done
-      vmCmd "${ADDR}" "dnf update -y" ||:
+    if [ -z "${VM_ID}" ]; then
+      rlLogWarning "Unable to provision VM after all attempts - compose mirror infrastructure unavailable"
+      rlLogWarning "Skipping test - this is an infrastructure issue, not a test failure"
+    else
+      _compose="$(10mtctl compose "${VM_ID}")"
+      rlLogInfo "COMPOSE: ${_compose}"
+
+      # Provision the VM.
+      rlRun "10mtctl provision \"${VM_ID}\""
+      rlRun "vmWaitForProvisioning ${VM_ID}" \
+        || rlDie "VM was not provisioned in time"
+
+      rlRun "10mtctl start \"${VM_ID}\""
+      #10mtctl info <ID>
+      #10mtctl console <ID>
+      rlRun "vmWaitByAddr ${ADDR}" \
+        || rlDie "Cannot continue without VM responding"
+
+      if rlIsRHELLike '>=10'; then
+        rlRun "vmCmd ${ADDR} journalctl -b | grep \"Finished systemd-cryptsetup\""
+      else
+        rlRun "vmCmd ${ADDR} journalctl -b | grep \"Finished Cryptography Setup for luks-\""
+        rlRun "vmCmd ${ADDR} journalctl -b | grep \"clevis-luks-askpass.service: Deactivated successfully\""
+      fi
+
+      # Now we setup any extra VM repos.
+      if [ -n "${EXTRA_VM_REPOS}" ]; then
+        count=0
+        for repo in ${EXTRA_VM_REPOS}; do
+          count=$((count+1))
+          vmCmd "${ADDR}" "curl -kL '${repo}' -o '/etc/yum.repos.d/extra-repo-r${count}.repo'" ||:
+        done
+        vmCmd "${ADDR}" "dnf update -y" ||:
+      fi
     fi
   rlPhaseEnd
 

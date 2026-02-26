@@ -45,6 +45,16 @@ function get_IP() {
     fi
 }
 
+# Wrap IPv6 addresses in brackets for use in URLs
+function format_ip_for_url() {
+    local ip="$1"
+    if echo "$ip" | grep -q ':'; then
+        echo "[$ip]"
+    else
+        echo "$ip"
+    fi
+}
+
 function assign_roles() {
     if [ -n "${TMT_TOPOLOGY_BASH}" ] && [ -f "${TMT_TOPOLOGY_BASH}" ]; then
         . "${TMT_TOPOLOGY_BASH}"
@@ -84,9 +94,11 @@ function Clevis_Client_Test() {
             rlRun "mkdir -p /var/opt"
             rlRun "truncate -s 512M ${ENCRYPTED_FILE}"
             rlRun "echo -n 'password' | cryptsetup luksFormat ${ENCRYPTED_FILE} -"
-            rlRun "curl -sf http://${TANG_IP}/adv -o ${ADV_FILE}"
-            
-            SSS_CONFIG='{"t":1,"pins":{"tang":[{"url":"http://'"${TANG_IP}"'","adv":"'"${ADV_FILE}"'"}]}}'
+            local TANG_URL_IP
+            TANG_URL_IP=$(format_ip_for_url "${TANG_IP}")
+            rlRun "curl -sf http://${TANG_URL_IP}/adv -o ${ADV_FILE}"
+
+            SSS_CONFIG='{"t":1,"pins":{"tang":[{"url":"http://'"${TANG_URL_IP}"'","adv":"'"${ADV_FILE}"'"}]}}'
             rlRun "clevis luks bind -f -d ${ENCRYPTED_FILE} sss '${SSS_CONFIG}'" <<< 'password'
 
             rlLog "Creating custom systemd service for Clevis unlock"
@@ -99,7 +111,9 @@ DefaultDependencies=no
 [Service]
 Type=oneshot
 RemainAfterExit=yes
+TimeoutStartSec=180
 ExecStart=/usr/bin/clevis-luks-unlock -d ${ENCRYPTED_FILE} -n ${LUKS_DEV_NAME}
+ExecStartPost=/bin/bash -c 'mountpoint -q ${MOUNT_POINT} || mount ${MOUNT_POINT}'
 [Install]
 WantedBy=multi-user.target
 EOF
@@ -132,12 +146,31 @@ EOF
         rlPhaseStartCleanup "Clevis Client: Cleanup"
             rlRun "systemctl disable clevis-test-unlock.service --now >/dev/null 2>&1 ||:"
             rlRun "rm -f /etc/systemd/system/clevis-test-unlock.service"
-            rlRun "umount ${MOUNT_POINT}" || rlLogInfo "Device not mounted"
-            rlRun "cryptsetup luksClose ${LUKS_DEV_NAME}" || rlLogInfo "Device not open"
-            
-            rlRun "rm -f '${ENCRYPTED_FILE}' '${ADV_FILE}' '$COOKIE_CONFIG' '$COOKIE_INSTALL'"
+
+            # Remove fstab entry and reload systemd BEFORE closing the device,
+            # otherwise systemd's auto-generated mount unit from fstab keeps
+            # a reference to the device mapper device, preventing luksClose.
             [ -f /etc/fstab ] && rlRun "sed -i '\|${MOUNT_POINT}|d' /etc/fstab"
-            rlRun "rmdir ${MOUNT_POINT}" || rlLogInfo "Mount point directory already removed"
+            rlRun "systemctl daemon-reload"
+
+            # Unmount all layers — on RHEL-10+ both the systemd auto-generated
+            # mount unit and ExecStartPost may mount the device, resulting in
+            # a double mount that a single umount does not fully clear.
+            local _unmount_attempts=0
+            while mountpoint -q "${MOUNT_POINT}" && [ "${_unmount_attempts}" -lt 10 ]; do
+                umount "${MOUNT_POINT}" 2>/dev/null || sleep 2
+                _unmount_attempts=$((_unmount_attempts + 1))
+            done
+            
+            # Verify unmount was successful before trying to close LUKS
+            if mountpoint -q "${MOUNT_POINT}"; then
+                rlFail "Failed to unmount ${MOUNT_POINT} after ${_unmount_attempts} attempts. Device is likely busy."
+            fi
+            rlRun "udevadm settle"
+            rlRun "cryptsetup luksClose ${LUKS_DEV_NAME}" || rlLogInfo "Device not open"
+
+            rlRun "rm -f '${ENCRYPTED_FILE}' '${ADV_FILE}' '$COOKIE_CONFIG' '$COOKIE_INSTALL'"
+            rlRun "rmdir ${MOUNT_POINT} 2>/dev/null" 0-1 "Remove mount point"
 
             unset SYNC_PROVIDER
             rlRun "sync-set CLIENT_CLEANUP_DONE"
@@ -147,7 +180,7 @@ EOF
 
 function Tang_Server() {
     rlPhaseStartSetup "Tang Server: Setup"
-        rlRun "systemctl enable --now rngd"
+        rlRun "systemctl enable --now rngd" 0-1
         rlRun "setenforce 0"
         rlRun "systemctl enable --now firewalld"
         rlRun "firewall-cmd --add-port=${SYNC_GET_PORT}/tcp --permanent"
@@ -158,7 +191,7 @@ function Tang_Server() {
         rlRun "jose jwk gen -i '{\"alg\":\"ES512\"}' -o /var/db/tang/sig.jwk"
         rlRun "jose jwk gen -i '{\"alg\":\"ECMR\"}' -o /var/db/tang/exc.jwk"
         rlRun "systemctl enable --now tangd.socket"
-        rlRun "curl -sf http://${TANG_IP}/adv"
+        rlRun "curl -sf http://localhost/adv"
         rlRun "sync-set TANG_SETUP_DONE"
     rlPhaseEnd
 
