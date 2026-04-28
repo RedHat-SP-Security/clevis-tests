@@ -15,6 +15,7 @@ prepare:
   - name: Install clevis build dependencies
     how: install
     package:
+      - git
       - meson
       - gcc
       - cmake
