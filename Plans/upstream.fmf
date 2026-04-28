@@ -1,0 +1,109 @@
+summary: test plan for clevis upstream source code testing
+
+context:
+    hwtpm: false
+
+prepare:
+  - how: shell
+    script:
+     - systemctl disable --now dnf-makecache.service || true
+     - systemctl disable --now dnf-makecache.timer || true
+     - dnf makecache
+     - echo "excludepkgs=clevis*" >> /etc/dnf/dnf.conf
+
+  - name: Install clevis build dependencies
+    how: install
+    package:
+      - meson
+      - gcc
+      - clang
+      - cmake
+      - jose
+      - libjose-devel
+      - cryptsetup-devel
+      - socat
+      - trousers
+      - tpm-tools
+      - tpm2-tools
+      - luksmeta
+      - libluksmeta-devel
+
+  - name: Build and install clevis from PR source
+    how: shell
+    script: |
+      git clone "$PACKIT_SOURCE_URL" /tmp/clevis-src
+      cd /tmp/clevis-src
+      git checkout "$PACKIT_SOURCE_SHA"
+      rm -fr build && mkdir build && pushd build
+      meson setup --prefix=/usr --wipe ..
+      meson compile -v
+      meson install
+      popd
+
+/sanity:
+  discover:
+    - name: Upstream_tests_ci_clevis
+      how: fmf
+      filter: tag:CI-Tier-1
+
+  execute:
+    how: tmt
+
+/pkcs11-luks:
+  context:
+    hwtpm: true
+  provision:
+    hardware:
+      tpm:
+        version: "2"
+  discover:
+    - name: tests the basic pkcs11 luks functionality of clevis (including the TPM2 module)
+      how: fmf
+      test:
+        - Sanity/pkcs11/luks
+
+  execute:
+    how: tmt
+
+/pkcs11-single-encrypted-disk:
+    context:
+      kickstart_pkcs11: true
+    provision:
+      hardware:
+        disk:
+          - size: '>= 10 GB'
+          - size: '>= 1GB'
+      kickstart:
+        metadata: no_autopart
+        pre-install: |
+          %pre --log=/dev/console
+            lsblk -a -o NAME,RM,SIZE,RO,TYPE,STATE,FSTYPE,PARTLABEL,MOUNTPOINT
+            list-harddrives
+            ROOTDRIVE=$(list-harddrives | head -1 |  cut -d" " -f1)
+            echo "ROOTDRIVE=$ROOTDRIVE"
+            SECONDDRIVE=$(list-harddrives | head -2 | tail -1 |  cut -d" " -f1)
+            echo "SECONDDRIVE=$SECONDDRIVE"
+            {
+              echo "zerombr"
+              echo "clearpart --drives=$ROOTDRIVE,$SECONDDRIVE"
+              echo "reqpart"
+              echo "part /  --ondisk=$ROOTDRIVE --grow"
+              echo "part /encrypted_disk --ondisk=$SECONDDRIVE --grow --label test_drive"
+            } >/tmp/makecustomparts
+          %end
+        script: |
+          %include /tmp/makecustomparts
+    discover:
+      - name: test create encrypted disk
+        how: fmf
+        test:
+          - pkcs11/single-encrypted-disk
+    adjust:
+      - when: distro == rhel-9 or distro == centos-stream-9
+        prepare+:
+          - how: shell
+            script:
+              - dnf install -y https://dl.fedoraproject.org/pub/epel/epel-release-latest-9.noarch.rpm https://dl.fedoraproject.org/pub/epel/epel-next-release-latest-9.noarch.rpm
+
+    execute:
+      how: tmt
