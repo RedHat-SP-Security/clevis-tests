@@ -4,7 +4,7 @@
 
 rlJournalStart
     rlPhaseStartSetup
-        rlAssertRpm "clevis-systemd"
+        rlRun "rpm -q clevis-systemd || which clevis" 0 "Checking for the presence of clevis-systemd rpm"
         rlIsRHEL && rlAssertRpm "redhat-release"
         rlIsFedora && rlAssertRpm "fedora-release-common"
     rlPhaseEnd

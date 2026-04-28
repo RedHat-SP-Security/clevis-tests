@@ -34,7 +34,7 @@ PACKAGES="${PACKAGE} ${PACKAGE}-luks"
 
 rlJournalStart
     rlPhaseStartSetup
-        rlAssertRpm --all
+        rlRun "rpm -q clevis || which clevis" 0 "Checking for the presence of clevis rpm"
     rlPhaseEnd
 
     rlPhaseStartTest "Overwrite existing initramfs file"

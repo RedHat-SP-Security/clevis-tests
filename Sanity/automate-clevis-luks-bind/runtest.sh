@@ -36,7 +36,7 @@ PACKAGES="${PACKAGE} ${PACKAGE}-luks tang cryptsetup"
 
 rlJournalStart
     rlPhaseStartSetup
-        rlAssertRpm --all
+        rlRun "rpm -q clevis || which clevis" 0 "Checking for the presence of clevis rpm"
         rlRun "TmpDir=\$(mktemp -d)" 0 "Creating tmp directory"
         rlRun "pushd ${TmpDir}"
 

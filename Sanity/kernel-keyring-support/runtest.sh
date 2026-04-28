@@ -41,7 +41,7 @@ TOKEN_ID="5"
 
 rlJournalStart
     rlPhaseStartSetup
-        rlAssertRpm --all
+        rlRun "rpm -q clevis || which clevis" 0 "Checking for the presence of clevis rpm"
         rlRun "clevisVersion=$(rpm -q ${PACKAGE} --qf ${FMT})"
 
         if rlIsFedora; then

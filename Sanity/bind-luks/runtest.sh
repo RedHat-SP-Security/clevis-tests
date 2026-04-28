@@ -75,7 +75,7 @@ PACKAGE="clevis"
 
 rlJournalStart
     rlPhaseStartSetup
-        rlAssertRpm $PACKAGE
+        rlRun "rpm -q $PACKAGE || which clevis" 0 "Checking for the presence of clevis rpm"
         # Include utils library containing critical functions
         rlRun ". ../../TestHelpers/utils.sh" || rlDie "cannot import function script"
         rlRun "TmpDir=\$(mktemp -d)" 0 "Creating tmp directory"

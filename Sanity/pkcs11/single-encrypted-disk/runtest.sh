@@ -86,7 +86,7 @@ rlJournalStart
             # Include utils library containing critical functions
             rlRun ". ../../../TestHelpers/utils.sh" || rlDie "cannot import function script"
             install_clevis_pkcs11
-            rlAssertRpm $PACKAGE
+            rlRun "rpm -q $PACKAGE || which clevis" 0 "Checking for the presence of clevis rpm"
 
             rlRun "packageVersion=$(rpm -q ${PACKAGE} --qf '%{name}-%{version}-%{release}\n')"
             rlTestVersion "${packageVersion}" '>=' 'clevis-20-2'

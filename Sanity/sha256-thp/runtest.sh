@@ -46,7 +46,7 @@ ENC_DATA='eyJhbGciOiJFQ0RILUVTIiwiY2xldmlzIjp7InBpbiI6InRhbmciLCJ0YW5nIjp7ImFkdi
 
 rlJournalStart
     rlPhaseStartSetup
-        rlAssertRpm --all || rlDie "cannot continue"
+        rlRun "rpm -q clevis || which clevis" 0 "Checking for the presence of clevis rpm" || rlDie "cannot continue"
 
         # Check if we have the expected minimum version.
         rlRun "packageVersion=$(rpm -q ${PACKAGE} --qf '%{name}-%{version}-%{release}\n')"

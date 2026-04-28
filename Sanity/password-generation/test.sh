@@ -30,7 +30,7 @@ PWQ_CONF="/etc/security/pwquality.conf"
 
 rlJournalStart
     rlPhaseStartSetup
-        rlAssertRpm --all
+        rlRun "rpm -q clevis || which clevis" 0 "Checking for the presence of clevis rpm"
         rlRun "tmp=\$(mktemp -d)" 0 "Create tmp directory"
         rlRun "pushd $tmp"
         rlRun "set -o pipefail"

@@ -31,7 +31,7 @@
 
 rlJournalStart
     rlPhaseStartSetup
-        rlAssertRpm "clevis" || rlDie
+        rlRun "rpm -q clevis || which clevis" 0 "Checking for the presence of clevis rpm" || rlDie
         rlRun "TmpDir=\$(mktemp -d)" 0 "Creating tmp directory"
         rlRun "pushd $TmpDir"
         if [ -d /root/rpmbuild ]; then

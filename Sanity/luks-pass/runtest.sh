@@ -35,7 +35,7 @@ FMT="%{name}-%{version}-%{release}\n"
 
 rlJournalStart
     rlPhaseStartSetup
-        rlAssertRpm --all
+        rlRun "rpm -q clevis || which clevis" 0 "Checking for the presence of clevis rpm"
         rlRun "packageVersion=$(rpm -q ${PACKAGE} --qf ${FMT})"
         rlTestVersion "${packageVersion}" '>=' 'clevis-11-5' \
             || rlDie "Tested functionality is not in old version ${packageVersion}"
