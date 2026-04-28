@@ -9,14 +9,14 @@ prepare:
      - systemctl disable --now dnf-makecache.service || true
      - systemctl disable --now dnf-makecache.timer || true
      - dnf makecache
-     - echo "excludepkgs=clevis*" >> /etc/dnf/dnf.conf
+     - dnf remove -y 'clevis*' || true
+     - grep -q 'excludepkgs=clevis' /etc/dnf/dnf.conf || echo "excludepkgs=clevis*" >> /etc/dnf/dnf.conf
 
   - name: Install clevis build dependencies
     how: install
     package:
       - meson
       - gcc
-      - clang
       - cmake
       - jose
       - libjose-devel
@@ -31,9 +31,10 @@ prepare:
   - name: Build and install clevis from PR source
     how: shell
     script: |
+      CHECKOUT_REF="${PACKIT_SOURCE_SHA:-${PACKIT_SOURCE_BRANCH:-${PACKIT_TARGET_BRANCH:-master}}}"
       git clone "$PACKIT_SOURCE_URL" /tmp/clevis-src
       cd /tmp/clevis-src
-      git checkout "$PACKIT_SOURCE_SHA"
+      git checkout "$CHECKOUT_REF"
       rm -fr build && mkdir build && pushd build
       meson setup --prefix=/usr --wipe ..
       meson compile -v
