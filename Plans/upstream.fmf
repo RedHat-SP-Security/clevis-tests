@@ -43,6 +43,8 @@ prepare:
       meson compile -v
       meson install
       popd
+      getent group clevis >/dev/null || groupadd -r clevis
+      id clevis >/dev/null 2>&1 || useradd -r -g clevis -G tss -s /sbin/nologin clevis
 
 /sanity:
   discover:

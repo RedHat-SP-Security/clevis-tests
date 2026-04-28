@@ -42,14 +42,14 @@ TOKEN_ID="5"
 rlJournalStart
     rlPhaseStartSetup
         rlRun "rpm -q clevis || which clevis" 0 "Checking for the presence of clevis rpm"
-        rlRun "clevisVersion=$(rpm -q ${PACKAGE} --qf ${FMT})"
-
-        if rlIsFedora; then
-            rlTestVersion "${clevisVersion}" '>=' 'clevis-18-14' \
-                || rlDie "Tested functionality is not in old version ${clevisVersion}"
-        elif rlIsRHEL; then
-            rlTestVersion "${clevisVersion}" '>=' 'clevis-18-107' \
-                || rlDie "Tested functionality is not in old version ${clevisVersion}"
+        if clevisVersion=$(rpm -q ${PACKAGE} --qf ${FMT} 2>/dev/null); then
+            if rlIsFedora; then
+                rlTestVersion "${clevisVersion}" '>=' 'clevis-18-14' \
+                    || rlDie "Tested functionality is not in old version ${clevisVersion}"
+            elif rlIsRHEL; then
+                rlTestVersion "${clevisVersion}" '>=' 'clevis-18-107' \
+                    || rlDie "Tested functionality is not in old version ${clevisVersion}"
+            fi
         fi
         rlRun "cryptsetupVersion=$(rpm -q cryptsetup --qf ${FMT})"
         rlTestVersion "${cryptsetupVersion}" '>=' 'cryptsetup-2.6' \

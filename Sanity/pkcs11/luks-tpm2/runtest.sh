@@ -42,8 +42,9 @@ rlJournalStart
         rlRun "TMPDIR=\$(mktemp -d)" 0 "Creating tmp directory"
         rlRun "pushd $TMPDIR"
 
-        rlRun "packageVersion=$(rpm -q ${PACKAGE} --qf '%{name}-%{version}-%{release}\n')"
-        rlTestVersion "${packageVersion}" '>=' 'clevis-20-2'
+        if packageVersion=$(rpm -q ${PACKAGE} --qf '%{name}-%{version}-%{release}\n' 2>/dev/null); then
+            rlTestVersion "${packageVersion}" '>=' 'clevis-20-2'
+        fi
 
         install_softhsm
 

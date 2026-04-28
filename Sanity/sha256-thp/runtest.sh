@@ -49,13 +49,14 @@ rlJournalStart
         rlRun "rpm -q clevis || which clevis" 0 "Checking for the presence of clevis rpm" || rlDie "cannot continue"
 
         # Check if we have the expected minimum version.
-        rlRun "packageVersion=$(rpm -q ${PACKAGE} --qf '%{name}-%{version}-%{release}\n')"
-        if rlIsRHEL '<9'; then
-            rlTestVersion "${packageVersion}" '>=' 'clevis-15-15' \
-                || rlDie "Tested functionality is not in old version ${packageVersion}. Minimum expected version is clevis-15-15"
-        else
-            rlTestVersion "${packageVersion}" '>=' 'clevis-18-1' \
-                || rlDie "Tested functionality is not in old version ${packageVersion}. Minimum expected version is clevis-18"
+        if packageVersion=$(rpm -q ${PACKAGE} --qf '%{name}-%{version}-%{release}\n' 2>/dev/null); then
+            if rlIsRHEL '<9'; then
+                rlTestVersion "${packageVersion}" '>=' 'clevis-15-15' \
+                    || rlDie "Tested functionality is not in old version ${packageVersion}. Minimum expected version is clevis-15-15"
+            else
+                rlTestVersion "${packageVersion}" '>=' 'clevis-18-1' \
+                    || rlDie "Tested functionality is not in old version ${packageVersion}. Minimum expected version is clevis-18"
+            fi
         fi
 
         # Backup any possibly existing keys then remove them.

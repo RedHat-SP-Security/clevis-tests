@@ -85,8 +85,7 @@ rlJournalStart
 
         rlRun -s "clevis luks unlock -d ${lodev}" 1 "Fail to automatic unlock device (tang server is stopped)"
 
-        rlRun "packageVersion=$(rpm -q ${PACKAGE} --qf '%{name}-%{version}-%{release}\n')"
-        if rlTestVersion "${packageVersion}" '>=' 'clevis-15-8'; then
+        if ! packageVersion=$(rpm -q ${PACKAGE} --qf '%{name}-%{version}-%{release}\n' 2>/dev/null) || rlTestVersion "${packageVersion}" '>=' 'clevis-15-8'; then
             rlAssertGrep "Error communicating with .*server http://localhost" $rlRun_LOG -Eq
         fi
         rm $rlRun_LOG

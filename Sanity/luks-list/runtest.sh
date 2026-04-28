@@ -36,10 +36,11 @@ FMT="%{name}-%{version}-%{release}\n"
 rlJournalStart
     rlPhaseStartSetup
         rlRun "rpm -q clevis || which clevis" 0 "Checking for the presence of clevis rpm"
-        rlRun "packageVersion=$(rpm -q ${PACKAGE} --qf ${FMT})"
-        rlTestVersion "${packageVersion}" '>=' 'clevis-11-5' \
-            || rlDie "Tested functionality is not in old version ${packageVersion}"
-        rlLogInfo "Sufficient version ${packageVersion} for running the test."
+        if packageVersion=$(rpm -q ${PACKAGE} --qf ${FMT} 2>/dev/null); then
+            rlTestVersion "${packageVersion}" '>=' 'clevis-11-5' \
+                || rlDie "Tested functionality is not in old version ${packageVersion}"
+            rlLogInfo "Sufficient version ${packageVersion} for running the test."
+        fi
 
         rlRun "TmpDir=\$(mktemp -d)" 0 "Creating tmp directory"
         rlRun "pushd $TmpDir"

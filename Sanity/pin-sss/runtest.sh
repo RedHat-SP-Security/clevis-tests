@@ -80,8 +80,11 @@ rlJournalStart
         rlRun "TmpDir=\$(mktemp -d)" 0 "Creating tmp directory"
         rlRun "pushd $TmpDir"
 
-        rlRun "packageVersion=$(rpm -q ${PACKAGE} --qf '%{name}-%{version}-%{release}\n')"
-        rlTestVersion "${packageVersion}" '>=' 'clevis-15-8' && checkTangURL=true || checkTangURL=false
+        if packageVersion=$(rpm -q ${PACKAGE} --qf '%{name}-%{version}-%{release}\n' 2>/dev/null); then
+            rlTestVersion "${packageVersion}" '>=' 'clevis-15-8' && checkTangURL=true || checkTangURL=false
+        else
+            checkTangURL=true
+        fi
         rlLog "Checking Tang URL in the error output: $checkTangURL"
     rlPhaseEnd
 
@@ -108,7 +111,7 @@ rlJournalStart
         fi
     rlPhaseEnd
 
-    if [ $(rpm -q --queryformat '%{VERSION}' clevis) -ge 15 ]; then
+    if ! rpm -q clevis &>/dev/null || [ $(rpm -q --queryformat '%{VERSION}' clevis) -ge 15 ]; then
         # Tests feature added in clevis-15.1 for RHEL-8.4
         rlPhaseStart FAIL "Valid sss config with wrong tang config"
             rlRun "curl -sS -o adv1.json \"http://localhost:$port1/adv\""

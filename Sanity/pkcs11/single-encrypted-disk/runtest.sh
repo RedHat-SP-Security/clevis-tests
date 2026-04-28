@@ -88,8 +88,9 @@ rlJournalStart
             install_clevis_pkcs11
             rlRun "rpm -q $PACKAGE || which clevis" 0 "Checking for the presence of clevis rpm"
 
-            rlRun "packageVersion=$(rpm -q ${PACKAGE} --qf '%{name}-%{version}-%{release}\n')"
-            rlTestVersion "${packageVersion}" '>=' 'clevis-20-2'
+            if packageVersion=$(rpm -q ${PACKAGE} --qf '%{name}-%{version}-%{release}\n' 2>/dev/null); then
+                rlTestVersion "${packageVersion}" '>=' 'clevis-20-2'
+            fi
 
             install_softhsm
 
