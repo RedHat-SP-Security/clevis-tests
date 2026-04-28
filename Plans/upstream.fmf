@@ -21,7 +21,9 @@ prepare:
       - cmake
       - jose
       - libjose-devel
+      - cryptsetup
       - cryptsetup-devel
+      - jq
       - socat
       - trousers
       - tpm-tools
