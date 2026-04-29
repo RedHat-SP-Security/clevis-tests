@@ -30,6 +30,8 @@ prepare:
       - tpm2-tools
       - luksmeta
       - libluksmeta-devel
+      - opensc
+      - pcsc-lite
 
   - name: Build and install clevis from PR source
     how: shell
