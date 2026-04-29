@@ -1,0 +1,31 @@
+summary: Verify clevis luks bind/regen/edit preserve non-default hash algorithm
+description: |
+    Clevis operations (bind, regen, edit) must preserve the hash algorithm
+    of LUKS devices formatted with a non-default hash (sha512). This test
+    verifies the fix from upstream commit 10c3965.
+test: ./runtest.sh
+recommend:
+  - clevis
+  - clevis-luks
+  - tang
+  - cryptsetup
+duration: 10m
+enabled: true
+tag:
+  - CI-Tier-1
+  - NoRHEL4
+  - NoRHEL5
+  - NoRHEL6
+  - NoRHEL7
+  - TIPpass
+  - Tier1
+tier: '1'
+extra-summary: /CoreOS/clevis/Sanity/luks-hash-preservation
+extra-task: /CoreOS/clevis/Sanity/luks-hash-preservation
+adjust:
+  - enabled: false
+    when: distro < rhel-8
+    continue: false
+  - enabled: false
+    when: distro ~< rhel-8.2
+    continue: false
