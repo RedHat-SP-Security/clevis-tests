@@ -6,6 +6,7 @@ recommend:
   - tang
 duration: 10m
 tag:
+  - fips
   - Tier3
 link:
   - verifies: https://bugzilla.redhat.com/show_bug.cgi?id=2207488
