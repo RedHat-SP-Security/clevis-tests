@@ -7,6 +7,7 @@ recommend:
 duration: 5m
 enabled: true
 tag:
+  - fips
   - NoRHEL4
   - NoRHEL5
   - SP-TBU

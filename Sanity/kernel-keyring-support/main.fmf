@@ -6,6 +6,7 @@ enabled: true
 link:
   - verifies: https://bugzilla.redhat.com/show_bug.cgi?id=2126533
 tag:
+  - fips
   - CI-Tier-1
   - Tier1
 tier: '1'
