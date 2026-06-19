@@ -49,7 +49,7 @@ function get_IP() {
         if [ -n "$ipv4" ]; then
             echo "$ipv4"
         else
-            getent hosts "$1" | awk '{ print $1 }' | head -n 1
+            getent hosts "$1" | awk '$1 ~ /^[0-9]+\./ { print $1; exit }'
         fi
     fi
 }
@@ -75,10 +75,13 @@ function assign_roles() {
         export TANG=$( echo "$SERVERS $CLIENTS" | awk '{ print $2 }')
     fi
     [ -z "$MY_IP" ] && MY_IP=$( hostname -I | tr ' ' '\n' | grep -E '^[0-9]+\.' | head -n 1 )
+    if [ -z "$MY_IP" ]; then
+        rlFail "No IPv4 address found for this host (hostname -I returned only IPv6). Sync library requires IPv4."
+    fi
     [ -n "$CLEVIS" ] && export CLEVIS_IP=$( get_IP "$CLEVIS" )
     [ -n "$TANG" ] && export TANG_IP=$( get_IP "$TANG" )
     if [ -z "$CLEVIS_IP" ] || [ -z "$TANG_IP" ]; then
-        rlFail "Could not resolve client or server IP addresses."
+        rlFail "Could not resolve IPv4 address for client or server. Sync library requires IPv4."
     fi
     rlLog "ROLE ASSIGNMENT:"
     rlLog "Client Host: ${CLEVIS} (${CLEVIS_IP})"
