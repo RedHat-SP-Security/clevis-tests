@@ -1,0 +1,4 @@
+PURPOSE of /CoreOS/clevis/Regression/RHEL-163324-luks-hash-check
+Description: Verifies that when binding to a LUKS device pre-formatted with a non-default hash algorithm (sha512), clevis respects and uses the same algorithm for its keyslot digest.
+Author: QE Automation <sec-eng-special@redhat.com>
+Bug: https://issues.redhat.com/browse/RHEL-163324
