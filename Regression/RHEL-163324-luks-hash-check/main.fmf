@@ -1,0 +1,24 @@
+summary: Test for RHEL-163324 - Clevis respects pre-formatted LUKS hash
+description: |
+    Bug: https://issues.redhat.com/browse/RHEL-163324
+    Verifies that `clevis luks bind` uses the hash algorithm (e.g., sha512)
+    specified during `luksFormat`, rather than defaulting to sha256.
+contact: QE Automation <sec-eng-special@redhat.com>
+test: ./runtest.sh
+framework: beakerlib
+recommend:
+    - clevis
+    - clevis-luks
+    - cryptsetup
+    - tang
+    - jose
+    - socat
+    - expect
+duration: 5m
+tag:
+    - Tier1
+    - regression
+adjust:
+    - enabled: false
+      when: distro < rhel-9.9
+      continue: false
