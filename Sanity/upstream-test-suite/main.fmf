@@ -1,4 +1,7 @@
 summary: Run the upstream test suite
+description: |
+    Verify that the clevis upstream test suite passes by building the project
+    from its source RPM, applying downstream patches, and running meson test.
 contact: Martin Zelený <mzeleny@redhat.com>
 test: ./runtest.sh
 recommend:

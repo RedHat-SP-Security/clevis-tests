@@ -1,4 +1,8 @@
 summary: tests the basic pkcs#11 luks and tpm2 functionality of clevis
+description: |
+    Verify that clevis LUKS binding and unlocking works with pkcs11 and tpm2 pins
+    combined via sss, including single-factor and two-factor threshold scenarios,
+    and that operations fail when the PKCS#11 token is removed.
 component:
   - clevis
 test: ./runtest.sh

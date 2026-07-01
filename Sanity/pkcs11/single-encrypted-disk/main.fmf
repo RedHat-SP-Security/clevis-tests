@@ -1,5 +1,9 @@
-summary: tests the clevis pkcs#11 luks functionality using a single encrypted 
+summary: tests the clevis pkcs#11 luks functionality using a single encrypted
     disk
+description: |
+    Verify that a LUKS-encrypted secondary disk bound with clevis pkcs11 pin
+    using a SoftHSM token is automatically unlocked by clevis during system boot
+    after a reboot.
 component:
   - clevis
 test: ./runtest.sh

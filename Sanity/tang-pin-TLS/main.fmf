@@ -1,4 +1,8 @@
 summary: tests the tang pin functionality of clevis with TLS connection
+description: |
+    Verify that clevis tang pin correctly encrypts and decrypts data over a TLS
+    connection using configurable certificate algorithms (RSA, ECDSA, ML-DSA-65),
+    with both interactive trust confirmation and known thumbprint methods.
 component:
   - tang
   - clevis

@@ -1,4 +1,8 @@
 summary: Simple version of 'clevis luks bind' test
+description: |
+    Verify that 'clevis luks bind' with a tang pin correctly binds a LUKS device,
+    'clevis luks unlock' successfully unlocks it, and that unlock fails when the
+    tang server is unavailable.
 test: ./runtest.sh
 recommend:
   - clevis-luks

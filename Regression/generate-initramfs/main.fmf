@@ -1,5 +1,8 @@
-summary: Do not break generating initramfs by 'dracut -f' when clevis-dracut is 
+summary: Do not break generating initramfs by 'dracut -f' when clevis-dracut is
     installed.
+description: |
+    Verify that regenerating the initramfs with 'dracut -f' succeeds when
+    clevis-dracut is installed and that clevis modules are included in the image.
 test: ./runtest.sh
 recommend:
   - clevis-dracut

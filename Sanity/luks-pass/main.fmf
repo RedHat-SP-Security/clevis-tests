@@ -1,5 +1,9 @@
-summary: Test the 'clevis luks pass' subcommand with the device and slot as a 
+summary: Test the 'clevis luks pass' subcommand with the device and slot as a
     parameter and check the passphrase used to bind that particular slot.
+description: |
+    Verify that 'clevis luks pass' extracts the correct passphrase for a
+    tang-bound LUKS slot and that the extracted passphrase can be used to
+    manually open the encrypted volume with cryptsetup.
 test: ./runtest.sh
 recommend:
   - clevis

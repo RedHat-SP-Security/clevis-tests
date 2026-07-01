@@ -1,4 +1,8 @@
 summary: Simple way how to test 'clevis encrypt tang'
+description: |
+    Verify that 'clevis encrypt tang' encrypts a plaintext file using a
+    pre-fetched tang advertisement and that 'clevis decrypt' restores the
+    original content.
 test: ./runtest.sh
 recommend:
   - clevis

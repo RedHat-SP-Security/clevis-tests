@@ -1,5 +1,9 @@
-summary: This test validates the newly added -y (assume-yes) parameter that 
+summary: This test validates the newly added -y (assume-yes) parameter that
     helps automate clevis luks bind
+description: |
+    Verify that the -y (assume-yes) parameter allows non-interactive clevis luks
+    bind, unlock, and unbind operations on both LUKS1 and LUKS2 devices using
+    tang and sss pins.
 test: ./runtest.sh
 recommend:
   - clevis

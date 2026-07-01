@@ -1,4 +1,7 @@
 summary: tests the basic pkcs#11 functionality of clevis
+description: |
+    Verify that clevis pkcs11 pin encrypts and decrypts data using a SoftHSM
+    token, and that decryption correctly fails when the token is removed.
 component:
   - clevis
 test: ./runtest.sh

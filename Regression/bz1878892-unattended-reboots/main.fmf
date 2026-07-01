@@ -1,4 +1,7 @@
 summary: Tests that the system unlocks a non-root device in early boot
+description: |
+    Verify that a LUKS-encrypted non-root device bound to a tang server via
+    clevis is automatically unlocked across multiple unattended VM reboots.
 test: ./runtest.sh
 recommend:
   - awk

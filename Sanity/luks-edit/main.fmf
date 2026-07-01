@@ -1,4 +1,8 @@
 summary: Tests for the clevis luks edit command
+description: |
+    Verify that 'clevis luks edit' correctly handles tang and sss pin
+    configuration changes on LUKS1 and LUKS2 devices, including URL updates,
+    threshold modifications, and rejection of invalid or unchanged configs.
 test: ./runtest.sh
 recommend:
   - clevis
