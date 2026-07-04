@@ -1,4 +1,8 @@
 summary: Test clevis SHA-256 thumbprints
+description: |
+    Verify that clevis supports both SHA-1 and SHA-256 tang thumbprints for
+    encryption and decryption, can decrypt legacy SHA-1 encoded data, and uses
+    SHA-256 thumbprints for newly encrypted data on RHEL 9+.
 test: ./runtest.sh
 recommend:
   - clevis

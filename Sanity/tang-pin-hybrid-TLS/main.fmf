@@ -1,5 +1,9 @@
-summary: tests tang pin with a 3-way hybrid TLS setup using Nginx and a 
+summary: tests tang pin with a 3-way hybrid TLS setup using Nginx and a
     socat-wrapped tangd.
+description: |
+    Verify that clevis tang pin works over HTTPS with a 3-way hybrid TLS
+    configuration (ECDSA, RSA, ML-DSA-65 certificates) using Nginx as a reverse
+    proxy, including interactive trust and thumbprint-based encryption.
 component:
   - tang
   - clevis

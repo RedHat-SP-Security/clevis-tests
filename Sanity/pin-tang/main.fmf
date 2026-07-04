@@ -1,4 +1,8 @@
 summary: tests the tang pin functionality of clevis
+description: |
+    Verify that clevis tang pin encrypts and decrypts data correctly using
+    interactive trust confirmation, known thumbprints, and pre-fetched
+    advertisement files.
 component:
   - tang
   - clevis

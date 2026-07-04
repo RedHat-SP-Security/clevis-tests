@@ -1,4 +1,8 @@
 summary: Generating password during clevis binding does not fail on low entropy
+description: |
+    Verify that clevis luks bind with a tang pin succeeds multiple times under
+    restrictive pwquality settings (maxclassrepeat), ensuring password generation
+    does not fail on low entropy.
 test: ./test.sh
 recommend:
   - clevis

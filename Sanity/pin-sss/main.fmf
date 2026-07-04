@@ -1,4 +1,8 @@
 summary: tests the sss pin functionality of clevis
+description: |
+    Verify that clevis sss pin correctly encrypts and decrypts data using a
+    threshold (t=2) of three tang servers, including scenarios where all, none,
+    one, or two servers are available.
 component:
   - tang
   - clevis

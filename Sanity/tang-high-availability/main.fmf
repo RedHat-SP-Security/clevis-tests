@@ -1,4 +1,8 @@
 summary: verifies sharing keys between tang servers
+description: |
+    Verify that data encrypted against one tang server can be decrypted by
+    a second tang server sharing the same key material, ensuring high
+    availability of the tang service.
 component:
   - tang
   - clevis

@@ -1,5 +1,8 @@
 summary: Test of clevis boot unlock via all possible pins (tang, tpm2) and using
     sss.
+description: |
+    Verify that a VM with a LUKS-encrypted disk can be automatically unlocked
+    during early boot using clevis with tang (over TLS) and sss pins.
 contact: Patrik Koncity <pkoncity@redhat.com>
 test: ./runtest.sh
 require:

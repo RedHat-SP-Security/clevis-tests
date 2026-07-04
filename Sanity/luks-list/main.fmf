@@ -1,4 +1,8 @@
 summary: Sanity check for listing PBD policies and check proper failing message
+description: |
+    Verify that 'clevis luks list' correctly displays bound PBD policies, that
+    'clevis luks bind' produces proper error messages for invalid pins and
+    missing configurations, and that bind/unlock operations work with tang.
 test: ./runtest.sh
 recommend:
   - clevis
