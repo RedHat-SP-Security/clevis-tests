@@ -36,28 +36,41 @@ rlJournalStart
     rlPhaseStartSetup
         # Include utils library containing critical functions
         rlRun ". ../../../TestHelpers/utils.sh" || rlDie "cannot import function script"
-        install_clevis_pkcs11
-        rlRun "rpm -q $PACKAGE || which clevis" 0 "Checking for the presence of clevis rpm"
-        rlRun "TMPDIR=\$(mktemp -d)" 0 "Creating tmp directory"
-        rlRun "pushd $TMPDIR"
 
-        if packageVersion=$(rpm -q ${PACKAGE} --qf '%{name}-%{version}-%{release}\n' 2>/dev/null); then
-            rlTestVersion "${packageVersion}" '>=' 'clevis-20-2'
+        # RSA-PKCS (PKCS#1 v1.5) padding is not allowed in FIPS mode
+        # and SoftHSM does not support RSA-PKCS-OAEP
+        if is_fips_enabled; then
+            FIPS_MODE=true
+            rlLog "FIPS mode detected: RSA-PKCS mechanism is not FIPS-compliant, skipping test"
+        else
+            FIPS_MODE=false
         fi
 
-        install_softhsm
+        if [ "$FIPS_MODE" != true ]; then
+            install_clevis_pkcs11
+            rlRun "rpm -q $PACKAGE || which clevis" 0 "Checking for the presence of clevis rpm"
+            rlRun "TMPDIR=\$(mktemp -d)" 0 "Creating tmp directory"
+            rlRun "pushd $TMPDIR"
 
-        create_hsm_config
+            if packageVersion=$(rpm -q ${PACKAGE} --qf '%{name}-%{version}-%{release}\n' 2>/dev/null); then
+                rlTestVersion "${packageVersion}" '>=' 'clevis-20-2'
+            fi
 
-        export SOFTHSM2_CONF=$TMPDIR/softhsm.conf
-        create_token
+            install_softhsm
 
-        # Get serial number of the token
-        TOKEN_SERIAL_NUM=$(pkcs11-tool --module $SOFTHSM_LIB -L | grep "serial num" | awk '{print $4}')
-        rlAssertNotEquals "Test that the serial number is not empty" "" $TOKEN_SERIAL_NUM
-        URI="{\"uri\": \"pkcs11:model=SoftHSM%20v2;manufacturer=SoftHSM%20project;serial=$TOKEN_SERIAL_NUM;token=$TOKEN_LABEL;id=$ID;module-path=$SOFTHSM_LIB?pin-value=$PINVALUE\", \"mechanism\": \"RSA-PKCS\"}"
+            create_hsm_config
+
+            export SOFTHSM2_CONF=$TMPDIR/softhsm.conf
+            create_token
+
+            # Get serial number of the token
+            TOKEN_SERIAL_NUM=$(pkcs11-tool --module $SOFTHSM_LIB -L | grep "serial num" | awk '{print $4}')
+            rlAssertNotEquals "Test that the serial number is not empty" "" $TOKEN_SERIAL_NUM
+            URI="{\"uri\": \"pkcs11:model=SoftHSM%20v2;manufacturer=SoftHSM%20project;serial=$TOKEN_SERIAL_NUM;token=$TOKEN_LABEL;id=$ID;module-path=$SOFTHSM_LIB?pin-value=$PINVALUE\", \"mechanism\": \"RSA-PKCS\"}"
+        fi
     rlPhaseEnd
 
+  if [ "$FIPS_MODE" != true ]; then
     rlPhaseStart FAIL "clevis pkcs11 - Simple text encryption and decryption"
         rlRun "echo 'this is a secret 1' > plain_text" 0 "Create a file to encrypt"
         rlRun "clevis encrypt pkcs11 '$URI' < plain_text > JWE" 0 "Encrypting the plain text"
@@ -132,10 +145,14 @@ rlJournalStart
         rlRun "rm plain_text JWE"
     rlPhaseEnd
 
+  fi # FIPS_MODE
+
     rlPhaseStartCleanup
-        rlRun "softhsm2-util --delete-token --token $TOKEN_LABEL" 0,1
-        rlRun "popd"
-        rlRun "rm -r $TMPDIR" 0 "Removing tmp directory"
+        if [ "$FIPS_MODE" != true ]; then
+            rlRun "softhsm2-util --delete-token --token $TOKEN_LABEL" 0,1
+            rlRun "popd"
+            rlRun "rm -r $TMPDIR" 0 "Removing tmp directory"
+        fi
     rlPhaseEnd
 rlJournalPrintText
 rlJournalEnd

@@ -26,10 +26,10 @@ grep_b64() {
             jose b64 dec -i "$2" -O -
 }
 
-# Copies ALL server certificates to the system trust store.
+# Copies server certificates to the system trust store.
 trust_certs() {
     rlRun "cp server_ecdsa.crt /etc/pki/ca-trust/source/anchors/temp-tang-ecdsa-$$.crt"
-    rlRun "cp server_mldsa.crt /etc/pki/ca-trust/source/anchors/temp-tang-mldsa-$$.crt"
+    [ -f server_mldsa.crt ] && rlRun "cp server_mldsa.crt /etc/pki/ca-trust/source/anchors/temp-tang-mldsa-$$.crt"
     rlRun "cp server_rsa.crt /etc/pki/ca-trust/source/anchors/temp-tang-rsa-$$.crt"
     rlRun "update-ca-trust"
 }
@@ -47,9 +47,15 @@ rlJournalStart
         rlRun ". ../../TestHelpers/utils.sh" || rlDie "cannot import function script"
         rlRun "TmpDir=\$(mktemp -d)" 0 "Creating tmp directory"
         rlRun "pushd $TmpDir"
-        # Generate all three types of TLS certificates using the function from utils.sh
+        # Generate TLS certificates
         rlRun "gen_tls_cert 'ECDSA' 'server_ecdsa.key' 'server_ecdsa.crt'"
-        rlRun "gen_tls_cert 'ML-DSA-65' 'server_mldsa.key' 'server_mldsa.crt'"
+        if is_fips_enabled; then
+            MLDSA_AVAILABLE=false
+            rlLog "FIPS mode detected: skipping ML-DSA-65 certificate (not available in FIPS mode)"
+        else
+            rlRun "gen_tls_cert 'ML-DSA-65' 'server_mldsa.key' 'server_mldsa.crt'"
+            MLDSA_AVAILABLE=true
+        fi
         rlRun "gen_tls_cert 'RSA' 'server_rsa.key' 'server_rsa.crt'"
         trust_certs
         # Prepare and start Tang server
@@ -75,8 +81,13 @@ rlJournalStart
             fi
         done
         [ -n "$https_port" ] || { rlLogFatal "No free port for Nginx"; rlDie; }
+        MLDSA_SSL_LINES=""
+        if [ "$MLDSA_AVAILABLE" = true ]; then
+            MLDSA_SSL_LINES="    ssl_certificate     $(pwd)/server_mldsa.crt;
+    ssl_certificate_key $(pwd)/server_mldsa.key;"
+        fi
         cat > nginx.conf <<EOF
-# Managed by BeakerLib test for 3-way HYBRID TLS
+# Managed by BeakerLib test for HYBRID TLS
 pid $(pwd)/nginx.pid;
 error_log $(pwd)/nginx.error.log;
 events { worker_connections 1024; }
@@ -85,8 +96,7 @@ http { server {
     server_name localhost;
     ssl_certificate     $(pwd)/server_ecdsa.crt;
     ssl_certificate_key $(pwd)/server_ecdsa.key;
-    ssl_certificate     $(pwd)/server_mldsa.crt;
-    ssl_certificate_key $(pwd)/server_mldsa.key;
+${MLDSA_SSL_LINES}
     ssl_certificate     $(pwd)/server_rsa.crt;
     ssl_certificate_key $(pwd)/server_rsa.key;
     location / { proxy_pass http://localhost:${tang_http_port}; }
@@ -141,10 +151,14 @@ CLEVIS_END
         rlRun "grep 'SSL connection using.*RSA' rsa_debug.log" \
             0 "Verify RSA cipher was used"
         # ML-DSA-65
-        rlRun "curl -v --cacert server_mldsa.crt  https://localhost:$https_port/adv/ 2> mldsa_debug.log" \
-            0 "Connect with ML-DSA signature algorithm"
-        rlRun "grep 'SSL connection using.*id-ml-dsa-65' mldsa_debug.log" \
-            0 "Verify MLDSA65 cipher was used"
+        if [ "$MLDSA_AVAILABLE" = true ]; then
+            rlRun "curl -v --cacert server_mldsa.crt  https://localhost:$https_port/adv/ 2> mldsa_debug.log" \
+                0 "Connect with ML-DSA signature algorithm"
+            rlRun "grep 'SSL connection using.*id-ml-dsa-65' mldsa_debug.log" \
+                0 "Verify MLDSA65 cipher was used"
+        else
+            rlLog "Skipping ML-DSA-65 verification (not available in FIPS mode)"
+        fi
     rlPhaseEnd
 
     rlPhaseStartCleanup
