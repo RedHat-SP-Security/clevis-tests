@@ -1,5 +1,9 @@
 #!/bin/bash
 
+is_fips_enabled() {
+    [ "$(cat /proc/sys/crypto/fips_enabled 2>/dev/null)" = "1" ]
+}
+
 create_hsm_config() {
     # Create a configuration file for the softhsm
 

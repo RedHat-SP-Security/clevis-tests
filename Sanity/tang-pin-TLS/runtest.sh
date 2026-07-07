@@ -49,17 +49,28 @@ untrust_cert() {
 
 PACKAGE="clevis"
 
+SKIP_TEST=false
+
 rlJournalStart
     rlPhaseStartSetup
         rlRun ". ../../TestHelpers/utils.sh" || rlDie "cannot import function script"
         rlLog "TLS Certificate Algorithm: $CRYPTO_ALG"
         rlLog "TLS is ENABLED for this run."
-        rlRun "TmpDir=\$(mktemp -d)" 0 "Creating tmp directory"
-        rlRun "pushd $TmpDir"
-        rlRun "gen_tls_cert ${CRYPTO_ALG} 'server.key' 'server.crt'"
-        trust_cert
+
+        if is_fips_enabled && [ "$CRYPTO_ALG" = "ML-DSA-65" ]; then
+            rlLog "FIPS mode detected: ML-DSA-65 (post-quantum) is not available in FIPS mode, skipping test"
+            SKIP_TEST=true
+        fi
+
+        if ! $SKIP_TEST; then
+            rlRun "TmpDir=\$(mktemp -d)" 0 "Creating tmp directory"
+            rlRun "pushd $TmpDir"
+            rlRun "gen_tls_cert ${CRYPTO_ALG} 'server.key' 'server.crt'"
+            trust_cert
+        fi
     rlPhaseEnd
 
+  if ! $SKIP_TEST; then
     rlPhaseStart FAIL "tangd setup"
         # NOTE: This 'legacy_tang' check is from an old script version and will likely fail.
         # It's better to remove this if/else block if you only support modern tang.
@@ -103,11 +114,15 @@ CLEVIS_END
         rm -f adv plain enc plain2
     rlPhaseEnd
 
+  fi # ! $SKIP_TEST
+
     rlPhaseStartCleanup
-        stop_tang_fn "$port"
-        rlRun "popd"
-        untrust_cert
-        rlRun "rm -r $TmpDir" 0 "Removing tmp directory"
+        if ! $SKIP_TEST; then
+            stop_tang_fn "$port"
+            rlRun "popd"
+            untrust_cert
+            rlRun "rm -r $TmpDir" 0 "Removing tmp directory"
+        fi
     rlPhaseEnd
 rlJournalPrintText
 rlJournalEnd
