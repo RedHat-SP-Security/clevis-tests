@@ -1,7 +1,11 @@
 #!/bin/bash
 
+_FIPS_CACHED=""
 is_fips_enabled() {
-    [ "$(cat /proc/sys/crypto/fips_enabled 2>/dev/null)" = "1" ]
+    if [ -z "$_FIPS_CACHED" ]; then
+        [ "$(cat /proc/sys/crypto/fips_enabled 2>/dev/null)" = "1" ] && _FIPS_CACHED=1 || _FIPS_CACHED=0
+    fi
+    [ "$_FIPS_CACHED" = "1" ]
 }
 
 create_hsm_config() {

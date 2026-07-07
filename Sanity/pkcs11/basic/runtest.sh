@@ -46,7 +46,7 @@ rlJournalStart
             FIPS_MODE=false
         fi
 
-        if ! $FIPS_MODE; then
+        if [ "$FIPS_MODE" != true ]; then
             install_clevis_pkcs11
             rlRun "rpm -q $PACKAGE || which clevis" 0 "Checking for the presence of clevis rpm"
             rlRun "TMPDIR=\$(mktemp -d)" 0 "Creating tmp directory"
@@ -70,7 +70,7 @@ rlJournalStart
         fi
     rlPhaseEnd
 
-  if ! $FIPS_MODE; then
+  if [ "$FIPS_MODE" != true ]; then
     rlPhaseStart FAIL "clevis pkcs11 - Simple text encryption and decryption"
         rlRun "echo 'this is a secret 1' > plain_text" 0 "Create a file to encrypt"
         rlRun "clevis encrypt pkcs11 '$URI' < plain_text > JWE" 0 "Encrypting the plain text"
@@ -145,10 +145,10 @@ rlJournalStart
         rlRun "rm plain_text JWE"
     rlPhaseEnd
 
-  fi # ! $FIPS_MODE
+  fi # FIPS_MODE
 
     rlPhaseStartCleanup
-        if ! $FIPS_MODE; then
+        if [ "$FIPS_MODE" != true ]; then
             rlRun "softhsm2-util --delete-token --token $TOKEN_LABEL" 0,1
             rlRun "popd"
             rlRun "rm -r $TMPDIR" 0 "Removing tmp directory"

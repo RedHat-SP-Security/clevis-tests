@@ -62,7 +62,7 @@ rlJournalStart
             SKIP_TEST=true
         fi
 
-        if ! $SKIP_TEST; then
+        if [ "$SKIP_TEST" != true ]; then
             rlRun "TmpDir=\$(mktemp -d)" 0 "Creating tmp directory"
             rlRun "pushd $TmpDir"
             rlRun "gen_tls_cert ${CRYPTO_ALG} 'server.key' 'server.crt'"
@@ -70,7 +70,7 @@ rlJournalStart
         fi
     rlPhaseEnd
 
-  if ! $SKIP_TEST; then
+  if [ "$SKIP_TEST" != true ]; then
     rlPhaseStart FAIL "tangd setup"
         # NOTE: This 'legacy_tang' check is from an old script version and will likely fail.
         # It's better to remove this if/else block if you only support modern tang.
@@ -114,10 +114,10 @@ CLEVIS_END
         rm -f adv plain enc plain2
     rlPhaseEnd
 
-  fi # ! $SKIP_TEST
+  fi # SKIP_TEST
 
     rlPhaseStartCleanup
-        if ! $SKIP_TEST; then
+        if [ "$SKIP_TEST" != true ]; then
             stop_tang_fn "$port"
             rlRun "popd"
             untrust_cert

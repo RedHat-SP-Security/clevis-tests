@@ -82,7 +82,7 @@ rlJournalStart
         done
         [ -n "$https_port" ] || { rlLogFatal "No free port for Nginx"; rlDie; }
         MLDSA_SSL_LINES=""
-        if $MLDSA_AVAILABLE; then
+        if [ "$MLDSA_AVAILABLE" = true ]; then
             MLDSA_SSL_LINES="    ssl_certificate     $(pwd)/server_mldsa.crt;
     ssl_certificate_key $(pwd)/server_mldsa.key;"
         fi
@@ -151,7 +151,7 @@ CLEVIS_END
         rlRun "grep 'SSL connection using.*RSA' rsa_debug.log" \
             0 "Verify RSA cipher was used"
         # ML-DSA-65
-        if $MLDSA_AVAILABLE; then
+        if [ "$MLDSA_AVAILABLE" = true ]; then
             rlRun "curl -v --cacert server_mldsa.crt  https://localhost:$https_port/adv/ 2> mldsa_debug.log" \
                 0 "Connect with ML-DSA signature algorithm"
             rlRun "grep 'SSL connection using.*id-ml-dsa-65' mldsa_debug.log" \
