@@ -56,14 +56,19 @@ function format_ip_for_url() {
 }
 
 function assign_roles() {
+    local _name
     if [ -n "${TMT_TOPOLOGY_BASH}" ] && [ -f "${TMT_TOPOLOGY_BASH}" ]; then
         . "${TMT_TOPOLOGY_BASH}"
-        export CLEVIS=${TMT_GUESTS["client.hostname"]}
-        export TANG=${TMT_GUESTS["server.hostname"]}
+        for _name in $TMT_GUEST_NAMES; do
+            case "${TMT_GUESTS[${_name}.role]}" in
+                server) export TANG="${TMT_GUESTS[${_name}.hostname]}" ;;
+                client) export CLEVIS="${TMT_GUESTS[${_name}.hostname]}" ;;
+            esac
+        done
         export MY_IP="${TMT_GUEST[hostname]}"
     elif [ -n "$SERVERS" ]; then
-        export CLEVIS=$( echo "$SERVERS $CLIENTS" | awk '{ print $1 }')
-        export TANG=$( echo "$SERVERS $CLIENTS" | awk '{ print $2 }')
+        export CLEVIS="$( echo "$SERVERS $CLIENTS" | awk '{ print $1 }')"
+        export TANG="$( echo "$SERVERS $CLIENTS" | awk '{ print $2 }')"
     fi
     [ -z "$MY_IP" ] && MY_IP=$( hostname -I | awk '{ print $1 }' )
     [ -n "$CLEVIS" ] && export CLEVIS_IP=$( get_IP "$CLEVIS" )
