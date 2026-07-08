@@ -141,7 +141,12 @@ EOF
         rlPhaseEnd
     else
         rlPhaseStartTest "Clevis Client: Verify Automatic Boot Unlock"
-            sleep 5
+            local _wait=0
+            while ! cryptsetup status ${LUKS_DEV_NAME} &>/dev/null && [ "$_wait" -lt 120 ]; do
+                sleep 5
+                _wait=$((_wait + 5))
+                rlLog "Waiting for LUKS device to be unlocked... (${_wait}s)"
+            done
             rlRun "cryptsetup status ${LUKS_DEV_NAME}" 0 "Check that the LUKS device is active"
             rlRun "findmnt ${MOUNT_POINT}" 0 "Verify device was automatically mounted at boot"
             rlLog "Clevis correctly unlocked and mounted the device at boot time."
