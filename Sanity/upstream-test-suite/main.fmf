@@ -11,7 +11,9 @@ recommend:
   - grep
   - patch
   - lsof
-duration: 10m
+  - socat
+  - softhsm
+duration: 30m
 enabled: true
 tag:
   - NoRHEL4
