@@ -223,6 +223,12 @@ EOF
         rlRun "vmCmd ${ADDR} journalctl -b | grep \"clevis-luks-askpass.service: Deactivated successfully\""
       fi
 
+      # ensures clevis waits for network before contacting the Tang server.
+      # The observable proof is the absence of "Error communicating" messages.
+      if rlIsRHELLike '>=10.3'; then
+        rlRun "vmCmd ${ADDR} 'journalctl -b | grep \"Error communicating with server\"'" 1
+      fi
+
       # Now we setup any extra VM repos.
       if [ -n "${EXTRA_VM_REPOS}" ]; then
         count=0

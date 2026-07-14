@@ -9,6 +9,8 @@ require:
     url: https://github.com/RedHat-SP-Security/clevis-tests
     type: library
   - socat
+link:
+  - verifies: https://issues.redhat.com/browse/RHEL-186032
 duration: 2h
 enabled: true
 tag:
