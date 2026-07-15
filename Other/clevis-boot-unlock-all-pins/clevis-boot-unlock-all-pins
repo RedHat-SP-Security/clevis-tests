@@ -45,6 +45,20 @@ EOF
         sleep 0.1
       done
     done
+    # Add a second standalone Tang binding to exercise the
+    # SIGPIPE fix in have_tang_bindings. Only on releases that carry the fix.
+    source /etc/os-release
+    if [ "${VERSION_ID%%.*}" -ge 11 ] || \
+       { [ "${VERSION_ID%%.*}" -eq 10 ] && [ "${VERSION_ID#*.}" -ge 3 ]; }; then
+      for dev in $(blkid -t TYPE=crypto_LUKS -o device); do
+        attempts=0
+        until clevis luks bind -f -d "${dev}" tang '{"url":"https://'"${TANG_SERVER}"'","adv":"adv.jws"}' <<< '@LUKS_PW@'; do
+          attempts=$((attempts+1))
+          [ "${attempts}" -ge "${max_attempts}" ] && break
+          sleep 0.1
+        done
+      done
+    fi
     # Enable clevis-luks-askpass.
     systemctl enable clevis-luks-askpass.path ||:
     echo 'kernel_cmdline="rd.neednet=1"' > /etc/dracut.conf.d/10mt-ks-post-clevis.conf
