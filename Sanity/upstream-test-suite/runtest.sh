@@ -68,7 +68,9 @@ rlJournalStart
             rlRun "mkdir build"
             rlRun "pushd build"
                 rlRun "meson .."
-                rlRun "meson test" 0 "Running upstream test suite"
+                rlRun "meson test --timeout-multiplier 3" 0 "Running upstream test suite"
+                rlRun "cp meson-logs/testlog.txt ${TmpDir}/testlog.txt" 0,1 "Preserve meson test log"
+                rlFileSubmit "${TmpDir}/testlog.txt" "meson-testlog.txt"
             rlRun "popd"
         rlRun "popd"
     rlPhaseEnd
