@@ -1,0 +1,28 @@
+summary: Test for RHEL-178493 - TPM2 seal and reseal functionality with LUKS devices
+description: |
+    Bug: https://issues.redhat.com/browse/RHEL-178493
+    Validates clevis TPM2 binding, verifying PCR state, testing PCR policy
+    changes, and performing reseal operations using clevis luks bind and edit.
+contact: QE Automation <sec-eng-special@redhat.com>
+test: ./runtest.sh
+framework: beakerlib
+recommend:
+  - clevis
+  - clevis-luks
+  - clevis-pin-tpm2
+  - tpm2-tools
+  - cryptsetup
+duration: 15m
+enabled: true
+tag:
+  - fips
+  - CI-Tier-1
+  - SP-TBU
+  - Tier1
+tier: '1'
+extra-summary: /CoreOS/clevis/Regression/RHEL-178493-tpm2-seal-reseal
+extra-task: /CoreOS/clevis/Regression/RHEL-178493-tpm2-seal-reseal
+adjust:
+  - enabled: false
+    when: distro < rhel-8
+    continue: false
