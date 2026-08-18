@@ -1,0 +1,4 @@
+PURPOSE of /CoreOS/clevis/Regression/RHEL-178493-tpm2-seal-reseal
+Description: Test for RHEL-178493 - TPM2 seal and reseal functionality with LUKS devices
+Author: QE Automation <sec-eng-special@redhat.com>
+Bug: https://issues.redhat.com/browse/RHEL-178493
