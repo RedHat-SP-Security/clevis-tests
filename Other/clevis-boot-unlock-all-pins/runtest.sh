@@ -32,6 +32,20 @@
 # during the test. By default, we remove everything in the cleanup
 # step.
 DEBUG_VMS=${DEBUG_VMS:-}
+_CLEANUP_DONE=0
+
+cleanup_resources() {
+  [ "${_CLEANUP_DONE}" -eq 1 ] && return
+  _CLEANUP_DONE=1
+  type rlFileRestore >/dev/null 2>&1 && rlFileRestore ||:
+  [ -n "${DEBUG_VMS}" ] || { command -v 10mt >/dev/null 2>&1 && 10mt -A ||:; }
+  rm -f /usr/share/10mt/template/post/clevis-boot-unlock-all-pins
+  if type stop_tang_fn >/dev/null 2>&1 && [ -n "${TANG_PORT:-}" ]; then
+    stop_tang_fn "${TANG_PORT}" ||:
+  fi
+}
+
+trap cleanup_resources EXIT
 
 # This test aims to be an example of virtualiztion tests that use our "vm"
 # library. It goes like this:
@@ -226,7 +240,8 @@ EOF
       # ensures clevis waits for network before contacting the Tang server.
       # The observable proof is the absence of "Error communicating" messages.
       if rlIsRHELLike '>=10.3'; then
-        rlRun "vmCmd ${ADDR} 'journalctl -b | grep \"Error communicating with server\"'" 1
+        rlRun "vmCmd ${ADDR} 'for dev in \$(blkid -t TYPE=crypto_LUKS -o device); do count=\$(clevis luks list -d \"\$dev\" | grep -Ec \"tang\"); echo \"\$dev: \$count Tang bindings\"; test \"\$count\" -eq 2 || exit 1; done'" 0 \
+          "Verify two standalone Tang bindings per LUKS device"
       fi
 
       # Now we setup any extra VM repos.
@@ -242,21 +257,6 @@ EOF
   rlPhaseEnd
 
   rlPhaseStartCleanup
-    # The vm library may have backup'ed some files during its setup,
-    # so let's restore that now.
-    rlRun "rlFileRestore"
-
-    # By default, we remove the VMs that were created, but we can keep
-    # them if required, by setting DEBUG_VMS env variable.
-    # Let's also set this variable if some test did not pass, so we can
-    # try to debug it.
-    [ -n "${__INTERNAL_PHASES_WORST_RESULT}" ] \
-      && [ "${__INTERNAL_PHASES_WORST_RESULT}" != "PASS" ] \
-      && DEBUG_VMS=true
-
-    # You can list the 10mt VMs with "10mtctl list".
-    [ -z "${DEBUG_VMS}" ] && 10mt -A
-    rlRun "rm -f /usr/share/10mt/template/post/clevis-boot-unlock-all-pins"
-    stop_tang_fn "$TANG_PORT"
+    cleanup_resources
   rlPhaseEnd
 rlJournalEnd
