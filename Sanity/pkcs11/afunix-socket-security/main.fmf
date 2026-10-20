@@ -1,0 +1,37 @@
+summary: tests clevis pkcs#11 AF_UNIX socket daemon security properties
+description: |
+    Verify that clevis-pkcs11-afunix-socket-unlock daemon:
+    1. Does not crash on unbound client connections (CVE-2026-109976)
+    2. Creates sockets with restrictive permissions (CVE-2026-109969)
+    3. Does not log LUKS passphrases in plaintext (CVE-2026-109968)
+component:
+  - clevis
+test: ./runtest.sh
+recommend:
+  - clevis
+  - clevis-pin-pkcs11
+  - socat
+  - softhsm
+  - opensc
+  - procps-ng
+duration: 10m
+enabled: true
+tag:
+  - CI-Tier-1
+  - NoRHEL4
+  - NoRHEL5
+  - NoRHEL6
+  - NoRHEL7
+  - NoRHEL8
+  - TIPfail_Security
+  - Tier1
+  - Tier1security
+  - TierCandidatesFAIL
+tier: '1'
+extra-summary: /CoreOS/clevis/Sanity/pkcs11/afunix-socket-security
+extra-task: /CoreOS/clevis/Sanity/pkcs11/afunix-socket-security
+adjust:
+  - enabled: false
+    when: distro == rhel-4, rhel-5, rhel-6, rhel-7, rhel-8
+    continue: false
+id: a1b2c3d4-5e6f-7890-abcd-ef1234567890

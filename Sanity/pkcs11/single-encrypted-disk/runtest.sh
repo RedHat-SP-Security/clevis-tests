@@ -124,5 +124,17 @@ rlJournalStart
             rlAssertGrep "Device:/dev/disk/by-uuid/$disk_uuid unlocked successfully by clevis" "clevis-luks-service.log"
         fi
     rlPhaseEnd
+
+    rlPhaseStart FAIL "clevis pkcs11 - PIN file must not persist or be world-readable (CVE-2026-109970)"
+        PIN_FILE="/run/systemd/clevis-pkcs11.pin"
+        if [ -f "$PIN_FILE" ]; then
+            PIN_FILE_PERMS=$(stat -c '%a' "$PIN_FILE")
+            rlLog "PIN file still exists after boot with permissions: $PIN_FILE_PERMS"
+            rlAssertNotEquals "PIN file must NOT be world-readable (not 0644)" "$PIN_FILE_PERMS" "644"
+            rlAssert0 "PIN file permissions must be 0600 or stricter" $([ "$PIN_FILE_PERMS" = "600" ] && echo 0 || echo 1)
+        else
+            rlPass "PIN file $PIN_FILE does not exist after boot (properly cleaned up)"
+        fi
+    rlPhaseEnd
 rlJournalPrintText
 rlJournalEnd

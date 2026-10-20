@@ -82,6 +82,30 @@ rlJournalStart
         rlRun "rm plain_text decrypted_message JWE"
     rlPhaseEnd
 
+    rlPhaseStart FAIL "clevis pkcs11 - PIN not exposed on command line (CVE-2026-109971)"
+        rlRun "echo 'secret for cmdline test' > plain_text_cmdline" 0 "Create a file to encrypt"
+        rlRun "clevis encrypt pkcs11 '$URI' < plain_text_cmdline > JWE_cmdline" 0 "Encrypting the plain text"
+
+        # Start a background watcher that captures pkcs11-tool command lines
+        PIN_LEAKED=false
+        (while true; do
+            ps aux 2>/dev/null | grep '[p]kcs11-tool' | grep -q -- "-p ${PINVALUE}" && touch /tmp/pin_leaked
+            sleep 0.01
+        done) &
+        WATCHER_PID=$!
+
+        rlRun "clevis decrypt pkcs11 < JWE_cmdline > /dev/null" 0 "Decrypting to trigger pkcs11-tool invocation"
+
+        kill $WATCHER_PID 2>/dev/null; wait $WATCHER_PID 2>/dev/null
+
+        if [ -f /tmp/pin_leaked ]; then
+            PIN_LEAKED=true
+            rm -f /tmp/pin_leaked
+        fi
+        rlAssertEquals "PIN must NOT appear in pkcs11-tool command line arguments" "$PIN_LEAKED" "false"
+        rlRun "rm -f plain_text_cmdline JWE_cmdline"
+    rlPhaseEnd
+
     rlPhaseStart FAIL "Simple text encryption and decryption (pin-source)"
         # TODO: Uncomment once implemention is finished:
         #   - THE PIN-SOURCE attribute not yet implemented
