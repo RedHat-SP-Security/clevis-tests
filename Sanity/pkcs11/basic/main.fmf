@@ -21,6 +21,7 @@ recommend:
   - cryptsetup-devel
   - socat
   - tpm2-tools
+  - audit
   - luksmeta
   - libluksmeta-devel
 duration: 10m

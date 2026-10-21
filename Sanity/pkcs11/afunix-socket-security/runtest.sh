@@ -31,20 +31,27 @@
 
 PACKAGE="clevis"
 DAEMON="clevis-pkcs11-afunix-socket-unlock"
-SOCK_DIR=$(mktemp -d)
-DATA_SOCK="${SOCK_DIR}/clevis-pkcs11.sock"
-CONTROL_SOCK="${SOCK_DIR}/clevis-pkcs11.control.sock"
-LOG_FILE="${SOCK_DIR}/clevis-pkcs11-test.log"
+SOCK_DIR=""
+DATA_SOCK=""
+CONTROL_SOCK=""
+LOG_FILE=""
 
-cleanup_daemon() {
-    if [ -n "$DAEMON_PID" ] && kill -0 "$DAEMON_PID" 2>/dev/null; then
+stop_daemon() {
+    if [ -n "$DAEMON_PID" ]; then
         kill "$DAEMON_PID" 2>/dev/null
         wait "$DAEMON_PID" 2>/dev/null
+        DAEMON_PID=""
     fi
-    rm -rf "$SOCK_DIR"
 }
 
 start_daemon() {
+    # Recreate socket directory for a clean state each phase
+    rm -rf "$SOCK_DIR"
+    SOCK_DIR=$(mktemp -d)
+    DATA_SOCK="${SOCK_DIR}/clevis-pkcs11.sock"
+    CONTROL_SOCK="${SOCK_DIR}/clevis-pkcs11.control.sock"
+    LOG_FILE="${SOCK_DIR}/clevis-pkcs11-test.log"
+
     $DAEMON -l "$LOG_FILE" -f "$DATA_SOCK" -s 0 -t 120 &
     DAEMON_PID=$!
     # Wait for sockets to appear
@@ -73,15 +80,20 @@ rlJournalStart
 
         sleep 1
 
-        if kill -0 "$DAEMON_PID" 2>/dev/null; then
-            rlPass "Daemon survived unbound client connection"
-        else
-            wait "$DAEMON_PID"
+        # Try to reap — if wait succeeds the daemon exited (crashed)
+        if wait -n "$DAEMON_PID" 2>/dev/null; then
             EXIT_CODE=$?
             rlFail "Daemon crashed after unbound client connection (exit code: $EXIT_CODE)"
+            DAEMON_PID=""
+        else
+            # wait -n fails when PID is still running (no child to reap)
+            # Confirm it is actually alive with a signal
+            kill -0 "$DAEMON_PID" 2>/dev/null \
+                && rlPass "Daemon survived unbound client connection" \
+                || rlFail "Daemon is not running but wait did not reap it"
         fi
 
-        cleanup_daemon
+        stop_daemon
     rlPhaseEnd
 
     rlPhaseStart FAIL "Socket permissions must be restrictive (CVE-2026-109969)"
@@ -103,7 +115,7 @@ rlJournalStart
             rlLog "Control socket not found at $CONTROL_SOCK (may use different path)"
         fi
 
-        cleanup_daemon
+        stop_daemon
     rlPhaseEnd
 
     rlPhaseStart FAIL "Log file must not contain plaintext passphrase (CVE-2026-109968)"
@@ -111,7 +123,7 @@ rlJournalStart
         TEST_PASSPHRASE="SENSITIVE_TEST_PASSPHRASE_$(date +%s)"
 
         # Wait for control socket
-        local retries=50
+        retries=50
         while [ $retries -gt 0 ] && [ ! -S "$CONTROL_SOCK" ]; do
             sleep 0.1
             retries=$((retries - 1))
@@ -144,11 +156,12 @@ rlJournalStart
             rlLog "Control socket not available, skipping passphrase logging test"
         fi
 
-        cleanup_daemon
+        stop_daemon
     rlPhaseEnd
 
     rlPhaseStartCleanup
-        cleanup_daemon
+        stop_daemon
+        rm -rf "$SOCK_DIR"
     rlPhaseEnd
 rlJournalPrintText
 rlJournalEnd

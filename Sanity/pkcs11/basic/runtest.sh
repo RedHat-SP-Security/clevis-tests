@@ -86,24 +86,29 @@ rlJournalStart
         rlRun "echo 'secret for cmdline test' > plain_text_cmdline" 0 "Create a file to encrypt"
         rlRun "clevis encrypt pkcs11 '$URI' < plain_text_cmdline > JWE_cmdline" 0 "Encrypting the plain text"
 
-        # Start a background watcher that captures pkcs11-tool command lines
-        PIN_LEAKED=false
-        (while true; do
-            ps aux 2>/dev/null | grep '[p]kcs11-tool' | grep -q -- "-p ${PINVALUE}" && touch /tmp/pin_leaked
-            sleep 0.01
-        done) &
-        WATCHER_PID=$!
+        # Use audit to capture every execve of pkcs11-tool — cannot miss short-lived processes
+        AUDIT_LOG="/tmp/pkcs11-tool-audit-$$.log"
+        rlRun "auditctl -a always,exit -F arch=b64 -S execve -F path=$(which pkcs11-tool) -k pkcs11pin_test" \
+            0 "Install audit rule to capture pkcs11-tool execve"
 
         rlRun "clevis decrypt pkcs11 < JWE_cmdline > /dev/null" 0 "Decrypting to trigger pkcs11-tool invocation"
 
-        kill $WATCHER_PID 2>/dev/null; wait $WATCHER_PID 2>/dev/null
+        # Small delay to let audit flush
+        sleep 0.5
 
-        if [ -f /tmp/pin_leaked ]; then
+        rlRun "auditctl -d always,exit -F arch=b64 -S execve -F path=$(which pkcs11-tool) -k pkcs11pin_test" \
+            0 "Remove audit rule"
+
+        # Extract all pkcs11-tool command lines from audit log
+        ausearch -k pkcs11pin_test --raw 2>/dev/null > "$AUDIT_LOG" || true
+
+        PIN_LEAKED=false
+        # Check all forms: -p <PIN>, -p<PIN>, --pin <PIN>, --pin=<PIN>
+        if grep -qE -- "(-p\s+${PINVALUE}|-p${PINVALUE}|--pin\s+${PINVALUE}|--pin=${PINVALUE})" "$AUDIT_LOG" 2>/dev/null; then
             PIN_LEAKED=true
-            rm -f /tmp/pin_leaked
         fi
         rlAssertEquals "PIN must NOT appear in pkcs11-tool command line arguments" "$PIN_LEAKED" "false"
-        rlRun "rm -f plain_text_cmdline JWE_cmdline"
+        rlRun "rm -f plain_text_cmdline JWE_cmdline $AUDIT_LOG"
     rlPhaseEnd
 
     rlPhaseStart FAIL "Simple text encryption and decryption (pin-source)"
