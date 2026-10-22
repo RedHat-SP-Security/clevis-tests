@@ -80,17 +80,14 @@ rlJournalStart
 
         sleep 1
 
-        # Try to reap — if wait succeeds the daemon exited (crashed)
-        if wait -n "$DAEMON_PID" 2>/dev/null; then
+        # Check if the daemon is still alive (non-blocking)
+        if kill -0 "$DAEMON_PID" 2>/dev/null; then
+            rlPass "Daemon survived unbound client connection"
+        else
+            wait "$DAEMON_PID" 2>/dev/null
             EXIT_CODE=$?
             rlFail "Daemon crashed after unbound client connection (exit code: $EXIT_CODE)"
             DAEMON_PID=""
-        else
-            # wait -n fails when PID is still running (no child to reap)
-            # Confirm it is actually alive with a signal
-            kill -0 "$DAEMON_PID" 2>/dev/null \
-                && rlPass "Daemon survived unbound client connection" \
-                || rlFail "Daemon is not running but wait did not reap it"
         fi
 
         stop_daemon
