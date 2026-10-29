@@ -1,0 +1,56 @@
+summary: All PKCS#11 tests on a fully provisioned machine (TPM + dual disks + kickstart)
+
+context:
+    hwtpm: true
+    kickstart_pkcs11: true
+
+prepare:
+  - how: shell
+    script:
+     - systemctl disable --now dnf-makecache.service || true
+     - systemctl disable --now dnf-makecache.timer || true
+     - dnf makecache
+
+provision:
+    hardware:
+      tpm:
+        version: "2"
+      disk:
+        - size: '>= 10 GB'
+        - size: '>= 1 GB'
+    kickstart:
+      metadata: no_autopart
+      pre-install: |
+        %pre --log=/dev/console
+          lsblk -a -o NAME,RM,SIZE,RO,TYPE,STATE,FSTYPE,PARTLABEL,MOUNTPOINT
+          list-harddrives
+          ROOTDRIVE=$(list-harddrives | head -1 |  cut -d" " -f1)
+          echo "ROOTDRIVE=$ROOTDRIVE"
+          SECONDDRIVE=$(list-harddrives | head -2 | tail -1 |  cut -d" " -f1)
+          echo "SECONDDRIVE=$SECONDDRIVE"
+          {
+            echo "zerombr"
+            echo "clearpart --drives=$ROOTDRIVE,$SECONDDRIVE"
+            echo "reqpart"
+            echo "part /  --ondisk=$ROOTDRIVE --grow"
+            echo "part /encrypted_disk --ondisk=$SECONDDRIVE --grow --label test_drive"
+          } >/tmp/makecustomparts
+        %end
+      script: |
+        %include /tmp/makecustomparts
+
+discover:
+  - name: all_pkcs11_tests
+    how: fmf
+    test:
+      - /Sanity/pkcs11
+
+execute:
+    how: tmt
+
+adjust:
+  - when: distro == rhel-9 or distro == centos-stream-9
+    prepare+:
+      - how: shell
+        script:
+          - dnf install -y https://dl.fedoraproject.org/pub/epel/epel-release-latest-9.noarch.rpm https://dl.fedoraproject.org/pub/epel/epel-next-release-latest-9.noarch.rpm
