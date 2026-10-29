@@ -1,0 +1,3 @@
+PURPOSE of /CoreOS/clevis/Sanity/tang-pub-binding
+Description: T2.3a — Verify tang_pub in /rec response and binding storage semantics
+Author: Adam Prikryl <aprikryl@redhat.com>
