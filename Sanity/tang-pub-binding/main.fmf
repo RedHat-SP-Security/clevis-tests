@@ -1,0 +1,39 @@
+summary: T2.3a — Verify tang_pub in /rec response and binding storage semantics
+description: |
+    Verify the /rec/$kid endpoint returns tang_pub in its response, that the
+    returned key is correct and public-only, and that ECMR recovery semantics
+    are preserved. Also verify that new and regenerated bindings omit stored
+    Tang public keys.
+
+    Phases:
+    1. /rec/$kid includes tang_pub — public-only, matches ECMR identifier
+    2. New bindings do not persist Tang public keys
+    3. Legacy bindings with stored tang_pub can be migrated
+    4. Returned-key identifier mismatch is rejected
+component:
+  - tang
+  - clevis
+  - jose
+test: ./runtest.sh
+recommend:
+  - clevis
+  - clevis-luks
+  - tang
+  - socat
+  - expect
+  - psmisc
+  - curl
+  - jq
+duration: 10m
+enabled: true
+tag:
+  - pqc
+  - tang-pub
+  - Tier2
+tier: '2'
+extra-summary: /CoreOS/clevis/Sanity/tang-pub-binding
+extra-task: /CoreOS/clevis/Sanity/tang-pub-binding
+adjust:
+  - enabled: false
+    when: distro == rhel-4, rhel-5, rhel-6, rhel-7, rhel-8
+    continue: false
