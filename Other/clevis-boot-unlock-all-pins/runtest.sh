@@ -58,11 +58,6 @@ trap cleanup_resources EXIT
 #    contain a list of VM-IDs, such as vmWaitForProvisioning 'VM1 VM2 VM2'
 # 5) At this point, the VM is ready and you can start and use it
 
-gen_tang_keys() {
-    rlRun "jose jwk gen -i '{\"alg\":\"ES512\"}' -o \"$1/sig.jwk\""
-    rlRun "jose jwk gen -i '{\"alg\":\"ECMR\"}' -o \"$1/exc.jwk\""
-}
-
 rlJournalStart
   rlPhaseStartSetup
     rlImport --all || rlDie "Import failed"
