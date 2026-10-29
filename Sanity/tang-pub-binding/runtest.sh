@@ -40,29 +40,24 @@ gen_tang_keys() {
 gen_tang_cache() {
     rlRun "/usr/libexec/tangd-update \"$1\" \"$2\""
 }
+TANG_PID=""
 start_tang() {
-    local i= cache="$1" port="$2"
-    if [ -z "$port" ]; then
-        for i in {8000..8999}; do
-            if ! fuser -s -n tcp "$i"; then
-                port="$i"
-                break
-            fi
-        done
-    fi
-    if [ -z "$port" ] || fuser -s -n tcp "$port"; then
-        rlLogFatal "no free port found for tangd: $port" 1>&2
-        return 1
-    fi
-    nohup socat "tcp-listen:$port,fork" exec:"/usr/libexec/tangd $cache" >/dev/null &
-    local pid=$!
-    rlWaitForSocket "$port" -p "$pid"
-    rlLogInfo "started tangd $cache as pid $pid on port $port" 1>&2
+    local cache="$1" port=""
+    port=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')
+    nohup socat "tcp4-listen:$port,bind=127.0.0.1,reuseaddr,fork" \
+        exec:"/usr/libexec/tangd $cache" >/dev/null &
+    TANG_PID=$!
+    rlWaitForSocket "$port" -p "$TANG_PID"
+    rlLogInfo "started tangd $cache as pid $TANG_PID on 127.0.0.1:$port" 1>&2
     [ ! -t 1 ] && echo "$port"
     return 0
 }
 stop_tang() {
-    rlRun "fuser -s -k \"$1/tcp\""
+    if [ -n "$TANG_PID" ] && kill -0 "$TANG_PID" 2>/dev/null; then
+        rlRun "kill $TANG_PID" 0 "Stopping tangd pid $TANG_PID"
+        wait "$TANG_PID" 2>/dev/null
+        TANG_PID=""
+    fi
 }
 
 jwk_is_public_only() {
@@ -77,8 +72,8 @@ rlJournalStart
     rlPhaseStartSetup
         rlRun "rpm -q $PACKAGE || which clevis" 0 "Checking for the presence of clevis rpm"
         rlRun ". ../../TestHelpers/utils.sh" || rlDie "cannot import function script"
-        rlRun "TmpDir=\$(mktemp -d)" 0 "Creating tmp directory"
-        rlRun "pushd $TmpDir"
+        rlRun "TmpDir=\$(mktemp -d)" 0 "Creating tmp directory" || rlDie "mktemp failed"
+        rlRun "pushd $TmpDir" || rlDie "cannot enter $TmpDir"
     rlPhaseEnd
 
     rlPhaseStart FAIL "tangd setup"
@@ -149,14 +144,29 @@ rlJournalStart
     rlPhaseEnd
 
     rlPhaseStart FAIL "Phase 1: Verify ECMR recovery result is preserved"
-        rlLog "The response should still contain the ECMR recovery result"
-        rlRun "jq -e '.kty' rec_response.json > /dev/null" 0 \
-            "Recovery response contains a JWK (ECMR result preserved)"
+        rlLog "Compute expected recovery result independently"
+        rlLog "The server performs ECMR: rec = exc_priv * ephem_pub"
+        rlLog "We verify by completing the exchange: result = ephem_priv * rec"
+        rlLog "This must equal exc_priv * ephem_priv * G (the shared point)"
 
-        rlLog "Verify response has the expected EC key type for ECMR"
+        rlRun "jq -e '.kty' rec_response.json > /dev/null" 0 \
+            "Recovery response contains a JWK"
         rlRun "resp_kty=\$(jq -r '.kty' rec_response.json)"
         rlAssertEquals "Recovery response kty is EC (backward compatible)" \
             "$resp_kty" "EC"
+
+        rlLog "Complete the ECMR exchange locally to verify the server's result"
+        rlRun "jose jwk exc -i ephem.jwk -I rec_response.json -o local_shared.jwk" 0 \
+            "Local ECMR exchange with server recovery result succeeds"
+
+        rlLog "Perform the same exchange using the original server key for comparison"
+        rlRun "jose jwk exc -i ephem.jwk -I tangd/db/exc.jwk -o expected_shared.jwk" 0 \
+            "Direct ECMR exchange with server key succeeds"
+
+        rlRun "local_thp=\$(jose jwk thp -i local_shared.jwk)"
+        rlRun "expected_thp=\$(jose jwk thp -i expected_shared.jwk)"
+        rlAssertEquals "ECMR recovery produces correct shared secret" \
+            "$local_thp" "$expected_thp"
     rlPhaseEnd
 
     # ------------------------------------------------------------------
@@ -258,11 +268,21 @@ rlJournalStart
             rlRun "jq --argjson fakekey \"\$(cat fake_exc.jwk)\" \
                 '.tang_pub = \$fakekey' rec_good.json > rec_tampered.json"
 
-            rlLog "Verify clevis would reject the mismatched key"
+            rlLog "Verify thumbprint mismatch is detectable"
             tampered_thp=$(jq -r '.tang_pub' rec_tampered.json | jose jwk thp -i-)
             rlAssertNotEquals "Tampered tang_pub thumbprint should not match exc_kid" \
                 "$tampered_thp" "$exc_kid"
-            rlLog "Mismatch detected: tang_pub thp=$tampered_thp vs expected=$exc_kid"
+
+            rlLog "Verify ECMR exchange with tampered key produces wrong shared secret"
+            rlRun "jose jwk exc -i ephem.jwk -I rec_tampered.json -o tampered_shared.jwk" 0,1
+            if [ -f tampered_shared.jwk ]; then
+                tampered_shared_thp=$(jose jwk thp -i tampered_shared.jwk)
+                rlAssertNotEquals \
+                    "Shared secret from tampered response must differ from expected" \
+                    "$tampered_shared_thp" "$expected_thp"
+            else
+                rlPass "ECMR exchange correctly refused the tampered response"
+            fi
         else
             rlLogWarning "tang_pub not present in /rec response — server may not yet support it; mismatch test deferred"
         fi
@@ -273,7 +293,7 @@ rlJournalStart
     # ------------------------------------------------------------------
 
     rlPhaseStartCleanup
-        stop_tang "$port"
+        stop_tang
         if [ -n "$lodev" ]; then
             rlRun "cryptsetup close \$(basename \$lodev) 2>/dev/null" 0,5
             rlRun "losetup -d \"\$lodev\""
