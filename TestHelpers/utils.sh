@@ -119,6 +119,21 @@ create_token() {
     rlPhaseEnd
 }
 
+gen_tang_keys() {
+    local key_dir="$1"
+    rlRun "jose jwk gen -i '{\"alg\":\"ES512\"}' -o \"$key_dir/sig.jwk\""
+    rlRun "jose jwk gen -i '{\"alg\":\"ECMR\"}' -o \"$key_dir/exc.jwk\""
+    if jose jwk gen -i '{"alg":"ML-KEM-768"}' -o /dev/null 2>/dev/null; then
+        rlRun "jose jwk gen -i '{\"alg\":\"ML-KEM-768\"}' -o \"$key_dir/kem.jwk\""
+    else
+        rlLogWarning "jose does not support ML-KEM-768 (requires jose PR #184); skipping KEM key generation"
+    fi
+}
+
+gen_tang_cache() {
+    rlRun "/usr/libexec/tangd-update \"$1\" \"$2\""
+}
+
 # Starts the tangd process reliably and saves its PID for cleanup.
 start_tang_fn() {
     local i= cache="$1" port="$2"
