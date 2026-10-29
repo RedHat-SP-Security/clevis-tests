@@ -119,14 +119,21 @@ create_token() {
     rlPhaseEnd
 }
 
+_TANG_HAS_KEM_CACHED=""
+tang_has_kem() {
+    if [ -z "$_TANG_HAS_KEM_CACHED" ]; then
+        jose jwk gen -i '{"alg":"ML-KEM-768"}' -o /dev/null 2>/dev/null \
+            && _TANG_HAS_KEM_CACHED=1 || _TANG_HAS_KEM_CACHED=0
+    fi
+    [ "$_TANG_HAS_KEM_CACHED" = "1" ]
+}
+
 gen_tang_keys() {
     local key_dir="$1"
     rlRun "jose jwk gen -i '{\"alg\":\"ES512\"}' -o \"$key_dir/sig.jwk\""
     rlRun "jose jwk gen -i '{\"alg\":\"ECMR\"}' -o \"$key_dir/exc.jwk\""
-    if jose jwk gen -i '{"alg":"ML-KEM-768"}' -o /dev/null 2>/dev/null; then
+    if tang_has_kem; then
         rlRun "jose jwk gen -i '{\"alg\":\"ML-KEM-768\"}' -o \"$key_dir/kem.jwk\""
-    else
-        rlLogWarning "jose does not support ML-KEM-768 (requires jose PR #184); skipping KEM key generation"
     fi
 }
 

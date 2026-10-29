@@ -33,13 +33,6 @@
 legacy_tang() {
     test -x /usr/libexec/tangd-update
 }
-gen_tang_keys() {
-    rlRun "jose jwk gen -i '{\"alg\":\"ES512\"}' -o \"$1/sig.jwk\""
-    rlRun "jose jwk gen -i '{\"alg\":\"ECMR\"}' -o \"$1/exc.jwk\""
-}
-gen_tang_cache() {
-    rlRun "/usr/libexec/tangd-update \"$1\" \"$2\""
-}
 grep_b64() {
     rlRun "jose b64 dec -i \"$2\" -O - | grep -q \"$1\"" 0 \
         "File '$2' should contain '$1' when b64-decrypted" || \
@@ -75,6 +68,7 @@ PACKAGE="clevis"
 
 rlJournalStart
     rlPhaseStartSetup
+        rlRun ". ../../TestHelpers/utils.sh" || rlDie "cannot import function script"
         rlRun "rpm -q $PACKAGE || which clevis" 0 "Checking for the presence of clevis rpm"
         rlRun "TmpDir=\$(mktemp -d)" 0 "Creating tmp directory"
         rlRun "pushd $TmpDir"
