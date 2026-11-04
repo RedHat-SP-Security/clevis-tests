@@ -97,10 +97,22 @@ luks_destroy() {
 }
 
 prepare_dracut() {
-    # Put the softhsm library and the configuration file to initramfs so it can be used
-    # by Clevis to load the smartcard and decrypt the disk.
+    # Put the softhsm library, configuration, and token data into initramfs so it
+    # can be used by Clevis to load the smartcard and decrypt the disk.
+    # On RHEL-10+ (systemd 257), cryptsetup runs during the initramfs phase before
+    # root fs is mounted, so the token data must be embedded in the initramfs.
     rlPhaseStart FAIL "softhsm dracut setup"
-        rlRun "dracut -f -v --include $SOFTHSM_LIB $SOFTHSM_LIB --include /etc/softhsm2.conf /etc/softhsm2.conf" 0 "Include softhsm libraries in initramfs"
+        local token_dir
+        token_dir=$(grep '^directories.tokendir' "${SOFTHSM2_CONF:-/etc/softhsm2.conf}" 2>/dev/null | sed 's/.*= *//')
+        [ -z "$token_dir" ] && token_dir="/var/lib/softhsm/tokens"
+
+        local dracut_cmd="dracut -f -v --include $SOFTHSM_LIB $SOFTHSM_LIB --include /etc/softhsm2.conf /etc/softhsm2.conf"
+        if [ -d "$token_dir" ]; then
+            dracut_cmd="$dracut_cmd --include $token_dir $token_dir"
+            rlLog "Including softhsm token data from $token_dir in initramfs"
+        fi
+
+        rlRun "$dracut_cmd" 0 "Include softhsm libraries, config, and tokens in initramfs"
     rlPhaseEnd
 }
 

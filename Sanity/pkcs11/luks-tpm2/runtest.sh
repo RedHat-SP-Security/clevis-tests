@@ -100,7 +100,7 @@ rlJournalStart
         rlRun "cryptsetup close test_disk"
 
          # Verify that it is not possible to unlock the disk if one of the the factors is not present (the card is not present)
-        rlRun "softhsm2-util --delete-token --token $TOKEN_LABEL" 0 "Delete the token to simulate card removal"as
+        rlRun "softhsm2-util --delete-token --token $TOKEN_LABEL" 0 "Delete the token to simulate card removal"
         rlRun "clevis luks unlock -d ${lodev} -n test_disk" 1 "Unlocking the disk should fail as the card is not present"
 
         rlRun "clevis luks unbind -d ${lodev} -s 1 -f"
