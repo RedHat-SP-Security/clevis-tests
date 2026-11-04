@@ -8,7 +8,7 @@ component:
   - clevis
   - jose
 test: ./runtest.sh
-recommend:
+required:
   - clevis
   - tang
   - socat
