@@ -206,3 +206,206 @@ stop_tang_fn() {
         rlRun "fuser -s -k \"$1/tcp\""
     fi
 }
+
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# Plain-HTTP tangd management (shared)
+#
+# Distinct from start_tang_fn/stop_tang_fn above, which wrap a TLS
+# (openssl-listen) listener. These helpers start plain HTTP tangd.
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+# True when the installed tang is the legacy variant with tangd-update.
+legacy_tang() {
+    test -x /usr/libexec/tangd-update
+}
+
+# Directory holding this file, resolved at source time so the shared
+# tang-fault-proxy.py can be located regardless of the caller's cwd.
+_TANG_HELPERS_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+
+# socat listener PIDs we started, as a flat "port=pid" list. Kept as a
+# plain string (not an associative array) so it survives being sourced
+# and called from any shell context.
+_TANG_HTTP_PIDS=""
+
+# Pick a free ephemeral port. The reservation lasts only while the python
+# process holds the socket, so there is a short window before socat binds;
+# if socat loses that race rlWaitForSocket fails and start_tang_http
+# reports an error instead of passing with a dead server.
+_tang_free_port() {
+    python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()'
+}
+
+_tang_http_remember_pid() { # PORT PID
+    _TANG_HTTP_PIDS="${_TANG_HTTP_PIDS:+${_TANG_HTTP_PIDS} }$1=$2"
+}
+
+_tang_http_pid_for() { # PORT -> echoes PID, fails when unknown
+    local entry
+    for entry in $_TANG_HTTP_PIDS; do
+        if [ "${entry%%=*}" = "$1" ]; then
+            echo "${entry#*=}"
+            return 0
+        fi
+    done
+    return 1
+}
+
+# Starts a plain-HTTP tangd listener. The key database/cache ($1) must
+# already exist. Optional arguments: an explicit port ($2) and a log file
+# ($3). The chosen port is echoed (so port=$(start_tang_http ...) works)
+# and also stored in the global TANG_HTTP_PORT.
+#
+# Call this helper DIRECTLY (start_tang_http dir; port=$TANG_HTTP_PORT)
+# rather than inside a command substitution: $(...) runs the helper in a
+# subshell, which discards the PID bookkeeping stop_tang_http relies on
+# and forces it back onto the by-port fallback.
+start_tang_http() {
+    local cache="$1" requested_port="${2:-}" log_file="${3:-}"
+    local port pid tangd
+
+    tangd="$(command -v tangd 2>/dev/null || true)"
+    [ -n "$tangd" ] || tangd=/usr/libexec/tangd
+    if [ ! -x "$tangd" ]; then
+        rlLogFatal "tangd executable not found" 1>&2
+        return 1
+    fi
+
+    if [ -n "$requested_port" ]; then
+        if fuser -s -n tcp "$requested_port" 2>/dev/null; then
+            rlLogFatal "Tang port $requested_port is already in use" 1>&2
+            return 1
+        fi
+        port="$requested_port"
+    else
+        # Ephemeral port instead of a fixed-range scan: no collisions
+        # between concurrent test runs racing over the same port range.
+        port="$(_tang_free_port)" || return 1
+    fi
+
+    # Bind to 127.0.0.1 only, so the temporary unauthenticated tangd is
+    # not reachable from other machines when the test host is networked.
+    if [ -n "$log_file" ]; then
+        nohup socat "tcp4-listen:$port,bind=127.0.0.1,reuseaddr,fork" \
+            exec:"$tangd $cache" >"$log_file" 2>&1 &
+    else
+        nohup socat "tcp4-listen:$port,bind=127.0.0.1,reuseaddr,fork" \
+            exec:"$tangd $cache" >/dev/null 2>&1 &
+    fi
+    pid=$!
+
+    if ! rlWaitForSocket "$port" -p "$pid"; then
+        rlLogFatal "tangd failed to start on port $port" 1>&2
+        kill "$pid" 2>/dev/null || :
+        wait "$pid" 2>/dev/null || :
+        return 1
+    fi
+
+    _tang_http_remember_pid "$port" "$pid"
+    TANG_HTTP_PORT="$port"
+    rlLogInfo "started tangd $cache as pid $pid on 127.0.0.1:$port" 1>&2
+    [ ! -t 1 ] && echo "$port"
+    return 0
+}
+
+# Stops a tangd started by start_tang_http. Kills only the socat listener
+# this test started for that port; when no listener of ours is recorded
+# for the port (e.g. the starter ran inside a command substitution), it
+# falls back to killing whatever listens on the port, matching the
+# historical fuser-based behavior.
+stop_tang_http() {
+    local port="$1" pid
+
+    if pid="$(_tang_http_pid_for "$port")"; then
+        if kill -0 "$pid" 2>/dev/null; then
+            rlRun "kill $pid" 0 "Stopping tangd pid $pid on port $port"
+            wait "$pid" 2>/dev/null || :
+        fi
+        return 0
+    fi
+
+    rlLogWarning "no tangd PID recorded for port $port; falling back to fuser" 1>&2
+    fuser -s -k "$port/tcp" 2>/dev/null
+    return 0
+}
+
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# Tang fault-injection proxy (shared)
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+# Starts the shared tang fault-injection proxy (tang-fault-proxy.py, next
+# to this file) in front of an already-running tangd. Usage:
+#   start_tang_fault_proxy UPSTREAM_URL [FAKE_KEY_FILE]
+# Sets TANG_PROXY_URL, TANG_PROXY_PORT, TANG_PROXY_PID, TANG_PROXY_MODE_FILE
+# and TANG_PROXY_EVENTS. Faults are enabled by writing comma-separated
+# mode names to ${TANG_PROXY_MODE_FILE}; see tang-fault-proxy.py for the
+# list. The events file records every forwarded request ("METHOD /path").
+# FAKE_KEY_FILE is only needed for the tamper-tang-pub mode.
+#
+# Call this helper DIRECTLY, not inside a command substitution: the
+# globals it sets would be lost in a subshell.
+start_tang_fault_proxy() {
+    local upstream="$1" fake_key="${2:-}" i
+
+    TANG_PROXY_DIR="$(mktemp -d)" || return 1
+    TANG_PROXY_MODE_FILE="${TANG_PROXY_DIR}/mode"
+    TANG_PROXY_PORT_FILE="${TANG_PROXY_DIR}/port"
+    TANG_PROXY_EVENTS="${TANG_PROXY_DIR}/events"
+    printf 'passthrough\n' > "${TANG_PROXY_MODE_FILE}"
+
+    python3 "${_TANG_HELPERS_DIR}/tang-fault-proxy.py" "$upstream" \
+        "${TANG_PROXY_MODE_FILE}" "${TANG_PROXY_PORT_FILE}" \
+        "${TANG_PROXY_EVENTS}" $([ -n "$fake_key" ] && printf %s "$fake_key") \
+        > "${TANG_PROXY_DIR}/proxy.log" 2>&1 &
+    TANG_PROXY_PID=$!
+
+    for i in {1..30}; do
+        [ -s "${TANG_PROXY_PORT_FILE}" ] && break
+        kill -0 "${TANG_PROXY_PID}" 2>/dev/null || break
+        sleep 1
+    done
+    if [ ! -s "${TANG_PROXY_PORT_FILE}" ]; then
+        rlLogFatal "tang fault proxy did not start; log: $(cat "${TANG_PROXY_DIR}/proxy.log" 2>/dev/null)" 1>&2
+        kill "${TANG_PROXY_PID}" 2>/dev/null || :
+        rm -rf "${TANG_PROXY_DIR}"
+        return 1
+    fi
+
+    TANG_PROXY_PORT="$(<"${TANG_PROXY_PORT_FILE}")"
+    TANG_PROXY_URL="http://localhost:${TANG_PROXY_PORT}"
+    rlLogInfo "started tang fault proxy as pid ${TANG_PROXY_PID} on ${TANG_PROXY_URL}" 1>&2
+    return 0
+}
+
+# Stops the fault proxy started by start_tang_fault_proxy and removes its
+# temporary directory (mode/port/events files and the proxy log).
+stop_tang_fault_proxy() {
+    if [ -n "${TANG_PROXY_PID:-}" ] && kill -0 "${TANG_PROXY_PID}" 2>/dev/null; then
+        rlRun "kill \${TANG_PROXY_PID}" 0 "Stopping the tang fault proxy"
+        wait "${TANG_PROXY_PID}" 2>/dev/null || :
+    fi
+    [ -n "${TANG_PROXY_DIR:-}" ] && rm -rf "${TANG_PROXY_DIR}"
+    TANG_PROXY_PID=""
+    TANG_PROXY_DIR=""
+    return 0
+}
+
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# Clevis LUKS binding inspection (shared)
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+# Extract the clevis JWE (general JSON format) from the LUKS2 token
+# metadata of device $1 into file $2. `clevis luks list` prints only the
+# pin name and config — the JWE protected header is where a stored Tang
+# advertisement (clevis.tang.adv) actually lives, so binding assertions
+# must run against this, not against the luks list output.
+save_clevis_jwe() {
+    cryptsetup luksDump --dump-json-metadata "$1" \
+        | jq -er '.tokens[] | select(.type == "clevis") | .jwe' > "$2"
+}
+
+# Decode the protected header of the general-format JWE file in $1 into
+# the file $2.
+save_jwe_header() {
+    jq -j '.protected' "$1" | jose b64 dec -i- > "$2"
+}

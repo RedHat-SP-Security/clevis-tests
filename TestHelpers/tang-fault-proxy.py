@@ -1,18 +1,24 @@
 #!/usr/bin/env python3
-"""Forward requests to a Tang server and inject faults for the
-tang-pub-binding test.
+"""Shared fault-injection proxy in front of a Tang server.
 
-The mode file is re-read on every request and may contain several
-comma-separated modes:
+Used via the start_tang_fault_proxy()/stop_tang_fault_proxy() helpers in
+TestHelpers/utils.sh. The mode file is re-read on every request and may
+contain several comma-separated modes:
 
   passthrough      forward unchanged
-  block-version    404 for GET /version; clevis then cannot detect tang_pub
-                   support and stores the advertisement in the binding
-                   (pre-tang_pub, "legacy-format" behavior)
-  block-adv        404 for GET /adv
-  tamper-tang-pub  replace tang_pub in /rec POST responses with the key
-                   loaded from the fake-key file (simulates a MITM
-                   returning a mismatched server key)
+  block-version    404 for GET /version
+  tamper-version   rewrite the /version response so that
+                   features.hybrid_recovery is false
+  block-adv        404 for GET /adv and /adv/<kid> (does not affect
+                   /adv-kem)
+  block-adv-kem    404 for GET /adv-kem
+  block-rec-kem    404 for POST /rec-kem/<kid>
+  tamper-tang-pub  replace tang_pub in /rec/<kid> POST responses with the
+                   key loaded from the optional fake-key file (simulates
+                   a MITM returning a mismatched server key)
+
+Every request is appended to the events file as "METHOD /path" so tests
+can prove which endpoints a client actually contacted.
 """
 
 import http.client
@@ -22,7 +28,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit
 
 
-class TangPubProxy(BaseHTTPRequestHandler):
+class TangFaultProxy(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.0"
 
     def _modes(self):
@@ -46,11 +52,23 @@ class TangPubProxy(BaseHTTPRequestHandler):
         path = urlsplit(self.path).path
         modes = self._modes()
 
+        with open(self.server.events_file, "a", encoding="utf-8") as events:
+            events.write(f"{self.command} {path}\n")
+
         if "block-version" in modes and self.command == "GET" and path == "/version":
             self._failure("simulated /version failure")
             return
-        if "block-adv" in modes and self.command == "GET" and path.startswith("/adv"):
+        if "block-adv" in modes and self.command == "GET" \
+                and (path == "/adv" or path.startswith("/adv/")):
             self._failure("simulated /adv failure")
+            return
+        if "block-adv-kem" in modes and self.command == "GET" \
+                and path.startswith("/adv-kem"):
+            self._failure("simulated /adv-kem failure")
+            return
+        if "block-rec-kem" in modes and self.command == "POST" \
+                and path.startswith("/rec-kem/"):
+            self._failure("simulated /rec-kem failure")
             return
 
         request_headers = {
@@ -75,6 +93,16 @@ class TangPubProxy(BaseHTTPRequestHandler):
             return
         finally:
             connection.close()
+
+        if "tamper-version" in modes and self.command == "GET" \
+                and path == "/version":
+            try:
+                version = json.loads(response_body)
+                version.setdefault("features", {})["hybrid_recovery"] = False
+                response_body = json.dumps(version, separators=(",", ":")).encode()
+            except (TypeError, ValueError):
+                self.send_error(502, "Tang returned invalid JSON from /version")
+                return
 
         if "tamper-tang-pub" in modes and self.command == "POST" \
                 and path.startswith("/rec/"):
@@ -109,19 +137,20 @@ class TangPubProxy(BaseHTTPRequestHandler):
 
 
 def main():
-    if len(sys.argv) != 5:
-        raise SystemExit("usage: tang-pub-proxy.py TANG_URL MODE_FILE "
-                         "PORT_FILE FAKE_KEY_FILE")
+    if len(sys.argv) not in (5, 6):
+        raise SystemExit("usage: tang-fault-proxy.py TANG_URL MODE_FILE "
+                         "PORT_FILE EVENTS_FILE [FAKE_KEY_FILE]")
 
     upstream = urlsplit(sys.argv[1])
     if upstream.scheme != "http" or not upstream.hostname:
         raise SystemExit("TANG_URL must be an http:// URL")
 
-    server = ThreadingHTTPServer(("127.0.0.1", 0), TangPubProxy)
+    server = ThreadingHTTPServer(("127.0.0.1", 0), TangFaultProxy)
     server.upstream_host = upstream.hostname
     server.upstream_port = upstream.port or 80
     server.mode_file = sys.argv[2]
-    server.fake_key_file = sys.argv[4]
+    server.events_file = sys.argv[4]
+    server.fake_key_file = sys.argv[5] if len(sys.argv) == 6 else "/nonexistent"
 
     with open(sys.argv[3], "w", encoding="ascii") as port_file:
         port_file.write(f"{server.server_port}\n")

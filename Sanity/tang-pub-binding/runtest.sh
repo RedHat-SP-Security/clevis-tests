@@ -3,8 +3,8 @@
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 #
 #   runtest.sh of /CoreOS/clevis/Sanity/tang-pub-binding
-#   Description: T2.3a — Verify tang_pub in /rec response and binding
-#                storage semantics
+#   Description: Verify tang_pub in /rec response and binding storage
+#                semantics
 #   Author: Adam Prikryl <aprikryl@redhat.com>
 #
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -27,7 +27,7 @@
 #
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 #
-# Test flow (T2.3a, Track A — independent of ML-KEM):
+# Test flow (ECMR only — independent of ML-KEM):
 #   Capability: skip with a clear message when the tang build does not
 #               return tang_pub in /rec responses (non-PQC tang).
 #   Phase 1: /rec/$kid returns tang_pub — public-only, matching the
@@ -46,36 +46,14 @@
 . /usr/bin/rhts-environment.sh || :
 . /usr/share/beakerlib/beakerlib.sh || exit 1
 
-legacy_tang() {
-    test -x /usr/libexec/tangd-update
-}
-
-# gen_tang_keys()/gen_tang_cache() come from TestHelpers/utils.sh, sourced
-# in Setup below. The shared gen_tang_keys also generates kem.jwk when the
-# jose build supports ML-KEM-768 — harmless here (the advertisement just
-# carries an extra AKP key) and closer to a real PQC deployment.
-
-# Local tang startup. Stays local until the shared start_tang_http /
-# stop_tang_http helpers from PR #59 land; switch to them in a follow-up.
-TANG_PID=""
-start_tang() {
-    local cache="$1" port=""
-    port=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')
-    nohup socat "tcp4-listen:$port,bind=127.0.0.1,reuseaddr,fork" \
-        exec:"/usr/libexec/tangd $cache" >/dev/null &
-    TANG_PID=$!
-    rlWaitForSocket "$port" -p "$TANG_PID"
-    rlLogInfo "started tangd $cache as pid $TANG_PID on 127.0.0.1:$port" 1>&2
-    [ ! -t 1 ] && echo "$port"
-    return 0
-}
-stop_tang() {
-    if [ -n "$TANG_PID" ] && kill -0 "$TANG_PID" 2>/dev/null; then
-        rlRun "kill $TANG_PID" 0 "Stopping tangd pid $TANG_PID"
-        wait "$TANG_PID" 2>/dev/null
-        TANG_PID=""
-    fi
-}
+# tangd startup/shutdown (start_tang_http/stop_tang_http), the fault
+# injection proxy (start_tang_fault_proxy/stop_tang_fault_proxy), key
+# generation (gen_tang_keys/gen_tang_cache) and the JWE inspection helpers
+# (save_clevis_jwe/save_jwe_header) all come from TestHelpers/utils.sh,
+# sourced in Setup below. The shared gen_tang_keys also generates kem.jwk
+# when the jose build supports ML-KEM-768 — harmless here (the
+# advertisement just carries an extra AKP key) and closer to a real PQC
+# deployment.
 
 # NOTE: covers EC ("d") and oct ("k") private members. If this helper is
 # ever reused for AKP (ML-KEM) keys, check the AKP private member name as
@@ -86,38 +64,6 @@ jwk_is_public_only() {
         "JWK should not contain private components (d, priv, k)"
 }
 
-# Extract the clevis JWE (general JSON format) from the LUKS2 token
-# metadata of $1 into $2. `clevis luks list` prints only the pin name and
-# config — the JWE protected header is where a stored advertisement
-# (clevis.tang.adv) actually lives, so binding assertions must run against
-# this, not against the luks list output.
-save_clevis_jwe() {
-    cryptsetup luksDump --dump-json-metadata "$1" \
-        | jq -er '.tokens[] | select(.type == "clevis") | .jwe' > "$2"
-}
-
-# Decode the protected header of the general-format JWE file in $1 into $2.
-save_jwe_header() {
-    jq -j '.protected' "$1" | jose b64 dec -i- > "$2"
-}
-
-start_proxy() {
-    printf 'passthrough\n' > "${PROXY_MODE_FILE}"
-    python3 "${TESTDIR}/data/tang-pub-proxy.py" "http://localhost:${port}" \
-        "${PROXY_MODE_FILE}" "${PROXY_PORT_FILE}" "${FAKE_KEY_FILE}" \
-        > "${PROXY_LOG}" 2>&1 &
-    PROXY_PID=$!
-    local i
-    for i in {1..30}; do
-        [ -s "${PROXY_PORT_FILE}" ] && break
-        sleep 1
-    done
-    [ -s "${PROXY_PORT_FILE}" ] || return 1
-    proxy_port=$(<"${PROXY_PORT_FILE}")
-    rlLogInfo "started tang-pub proxy as pid ${PROXY_PID} on port ${proxy_port}" 1>&2
-    return 0
-}
-
 PACKAGE="clevis"
 SKIP_TEST=false
 
@@ -125,12 +71,9 @@ rlJournalStart
     rlPhaseStartSetup
         rlRun "rpm -q $PACKAGE || which clevis" 0 "Checking for the presence of clevis rpm"
         rlRun ". ../../TestHelpers/utils.sh" || rlDie "cannot import function script"
-        TESTDIR=$(pwd)
         rlRun "TmpDir=\$(mktemp -d)" 0 "Creating tmp directory" || rlDie "mktemp failed"
         rlRun "pushd $TmpDir" || rlDie "cannot enter $TmpDir"
-        PROXY_MODE_FILE="${TmpDir}/proxy.mode"
-        PROXY_PORT_FILE="${TmpDir}/proxy.port"
-        PROXY_LOG="${TmpDir}/proxy.log"
+        # Public-only attacker key injected by the tamper-tang-pub proxy mode.
         FAKE_KEY_FILE="${TmpDir}/fake_pub.jwk"
     rlPhaseEnd
 
@@ -145,8 +88,10 @@ rlJournalStart
             gen_tang_keys "tangd/db"
             tang_dir="tangd/db"
         fi
-        port=$(start_tang "$tang_dir")
-        rlRun "start_proxy" 0 "Start the tang fault-injection proxy"
+        rlRun "start_tang_http \"\$tang_dir\"" 0 "Start local tangd"
+        port="$TANG_HTTP_PORT"
+        rlRun "start_tang_fault_proxy \"http://localhost:\$port\" \"\$FAKE_KEY_FILE\"" 0 \
+            "Start the tang fault-injection proxy"
     rlPhaseEnd
 
     rlPhaseStartTest "Capability check: tang returns tang_pub in /rec"
@@ -305,9 +250,9 @@ rlJournalStart
         # tang_pub support via /version — so hiding /version behind the
         # proxy yields a genuine legacy-format binding without needing an
         # old clevis build.
-        printf 'block-version\n' > "${PROXY_MODE_FILE}"
+        printf 'block-version\n' > "${TANG_PROXY_MODE_FILE}"
         rlRun "clevis luks bind -f -k pwfile_legacy -d \"\$lodev_legacy\" tang \
-            '{\"url\":\"http://localhost:$proxy_port\",\"thp\":\"$thp\"}'"
+            '{\"url\":\"http://localhost:${TANG_PROXY_PORT}\",\"thp\":\"$thp\"}'"
 
         rlRun "save_clevis_jwe \"\$lodev_legacy\" legacy_binding.jwe" \
             0 "Extract legacy binding JWE from LUKS2 token metadata"
@@ -325,7 +270,7 @@ rlJournalStart
         # stored advertisement when reading a legacy binding. Current
         # clevis does not emit such a warning, so it is not asserted here;
         # the functional migration (regen drops the stored adv) is.
-        printf 'passthrough\n' > "${PROXY_MODE_FILE}"
+        printf 'passthrough\n' > "${TANG_PROXY_MODE_FILE}"
         rlRun "legacy_slot=\$(clevis luks list -d \"\$lodev_legacy\" \
             | head -1 | cut -d: -f1 | tr -d ' ')" 0 "Discover legacy binding slot"
         rlRun "clevis luks regen -d \"\$lodev_legacy\" -s \"\$legacy_slot\" -q" 0 \
@@ -360,16 +305,16 @@ rlJournalStart
             "$fake_kid" "$exc_kid"
 
         rlLog "Encrypt through the proxy (passthrough), then tamper /rec responses"
-        printf 'passthrough\n' > "${PROXY_MODE_FILE}"
+        printf 'passthrough\n' > "${TANG_PROXY_MODE_FILE}"
         rlRun "echo 'phase4-secret' | clevis encrypt tang \
-            '{\"url\":\"http://localhost:$proxy_port\",\"thp\":\"$thp\"}' > phase4.jwe"
+            '{\"url\":\"http://localhost:${TANG_PROXY_PORT}\",\"thp\":\"$thp\"}' > phase4.jwe"
 
         # Case A — /adv still reachable. clevis must discard the mismatched
         # tang_pub and take the exchange key from /adv by pinned-kid lookup.
         # Decryption succeeds, and the correct plaintext proves the attacker
         # key was not used: had clevis used it, the shared secret would
         # differ and the JWE AEAD authentication would fail.
-        printf 'tamper-tang-pub\n' > "${PROXY_MODE_FILE}"
+        printf 'tamper-tang-pub\n' > "${TANG_PROXY_MODE_FILE}"
         rlRun "clevis decrypt < phase4.jwe > phase4.out" 0 \
             "Decrypt succeeds via /adv fallback despite tampered tang_pub"
         rlAssertEquals "Plaintext correct — attacker key was not used" \
@@ -378,11 +323,11 @@ rlJournalStart
         # Case B — /adv blocked too. No trusted source for the exchange key
         # remains, so clevis must refuse the mismatched tang_pub and fail
         # closed.
-        printf 'tamper-tang-pub,block-adv\n' > "${PROXY_MODE_FILE}"
+        printf 'tamper-tang-pub,block-adv\n' > "${TANG_PROXY_MODE_FILE}"
         rlRun "clevis decrypt < phase4.jwe" 1 \
             "Decrypt fails closed when tang_pub mismatches and /adv is unavailable"
 
-        printf 'passthrough\n' > "${PROXY_MODE_FILE}"
+        printf 'passthrough\n' > "${TANG_PROXY_MODE_FILE}"
     rlPhaseEnd
 
     fi
@@ -392,11 +337,10 @@ rlJournalStart
     # ------------------------------------------------------------------
 
     rlPhaseStartCleanup
-        if [ -n "${PROXY_PID}" ]; then
-            rlRun "kill \${PROXY_PID}" 0,5 "Stopping the fault proxy"
-            wait "${PROXY_PID}" 2>/dev/null || :
+        stop_tang_fault_proxy
+        if [ -n "$port" ]; then
+            stop_tang_http "$port"
         fi
-        stop_tang
         if [ -n "${MAPPER}" ] && cryptsetup status "${MAPPER}" >/dev/null 2>&1; then
             rlRun "cryptsetup close ${MAPPER}" 0 "Closing mapper left open"
         fi
