@@ -64,11 +64,6 @@ rlJournalStart
     rlRun "rlImport --all" 0 "Import libraries" || rlDie "cannot continue"
     rlRun ". ../../TestHelpers/utils.sh" || rlDie "cannot import function script"
 
-: <<'EOF'
-#need to imported because pkcs11 implementation
-rlRun ". ../../TestHelpers/utils.sh" || rlDie "cannot import function script"
-EOF
-
     rlLogInfo "DEBUG_VMS=${DEBUG_VMS} <- set this variable if you want to keep the VMs after the test completes"
 
     rlLogInfo "DISABLE_SELINUX(${DISABLE_SELINUX})"
