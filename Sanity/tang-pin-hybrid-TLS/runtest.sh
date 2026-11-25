@@ -13,12 +13,6 @@
 . /usr/bin/rhts-environment.sh || :
 . /usr/share/beakerlib/beakerlib.sh || exit 1
 
-# Generates Tang's signing and exchange keys.
-gen_tang_keys() {
-    rlRun "jose jwk gen -i '{\"alg\":\"ES512\"}' -o \"$1/sig.jwk\""
-    rlRun "jose jwk gen -i '{\"alg\":\"ECMR\"}' -o \"$1/exc.jwk\""
-}
-
 # Decrypts a base64 encoded file and checks for a string.
 grep_b64() {
     rlRun "jose b64 dec -i \"$2\" -O - | grep -q \"$1\"" 0 \

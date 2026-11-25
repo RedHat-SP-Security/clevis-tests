@@ -33,12 +33,9 @@
 legacy_tang() {
     test -x /usr/libexec/tangd-update
 }
-gen_tang_keys() {
-    rlRun "/usr/libexec/tangd-keygen \"$1\""
-}
-gen_tang_cache() {
-    rlRun "/usr/libexec/tangd-update \"$1\" \"$2\""
-}
+# gen_tang_keys()/gen_tang_cache() come from TestHelpers/utils.sh (sourced
+# in Setup). These used to be local wrappers around tangd-keygen; they were
+# removed so that sourcing utils.sh cannot silently redefine them mid-run.
 grep_b64() {
     rlRun "jose b64 dec -i \"$2\" -O - | grep -q \"$1\"" 0 \
         "File '$2' should contain '$1' when b64-decrypted" || \
@@ -75,6 +72,7 @@ PACKAGE="clevis"
 rlJournalStart
     rlPhaseStartSetup
         rlRun "rpm -q $PACKAGE || which clevis" 0 "Checking for the presence of clevis rpm"
+        rlRun ". ../../TestHelpers/utils.sh" || rlDie "cannot import function script"
         rlRun "TmpDir=\$(mktemp -d)" 0 "Creating tmp directory"
         rlRun "pushd $TmpDir"
     rlPhaseEnd

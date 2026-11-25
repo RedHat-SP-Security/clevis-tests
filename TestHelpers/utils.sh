@@ -119,6 +119,52 @@ create_token() {
     rlPhaseEnd
 }
 
+# Cached ML-KEM-768 capability probe. The result is per-process and
+# intentionally never reset: a test that replaced the jose binary mid-run
+# (not something we do today) would get a stale answer.
+_TANG_HAS_KEM_CACHED=""
+# Detect whether the installed jose can generate ML-KEM-768 keys. This
+# reflects the jose build only, NOT the OpenSSL FIPS provider state: on a
+# FIPS-enabled host where ML-KEM is not approved it may report no KEM. Do
+# not reuse it as a FIPS-capability probe; FIPS prerequisite validation is
+# covered separately by the jose tests (T1.1 Phase 5).
+tang_has_kem() {
+    if [ -z "$_TANG_HAS_KEM_CACHED" ]; then
+        jose jwk gen -i '{"alg":"ML-KEM-768"}' -o /dev/null 2>/dev/null \
+            && _TANG_HAS_KEM_CACHED=1 || _TANG_HAS_KEM_CACHED=0
+    fi
+    [ "$_TANG_HAS_KEM_CACHED" = "1" ]
+}
+
+# Generate Tang keys in the directory given as (remaining) first argument:
+# ES512 signing (sig.jwk) and ECMR exchange (exc.jwk) keys, plus an
+# ML-KEM-768 key (kem.jwk) when jose supports it.
+#
+# Pass --require-kem as the first argument to hard-fail when ML-KEM-768 is
+# unavailable: hybrid (Tier 3) tests must fail rather than silently
+# provision a KEM-less Tang -- per the test strategy, release-gate tests
+# fail, they do not skip, when a mandatory dependency is absent.
+gen_tang_keys() {
+    local require_kem=false
+    if [ "${1:-}" = "--require-kem" ]; then
+        require_kem=true
+        shift
+    fi
+    local key_dir="$1"
+    rlRun "jose jwk gen -i '{\"alg\":\"ES512\"}' -o \"$key_dir/sig.jwk\""
+    rlRun "jose jwk gen -i '{\"alg\":\"ECMR\"}' -o \"$key_dir/exc.jwk\""
+    if tang_has_kem; then
+        rlRun "jose jwk gen -i '{\"alg\":\"ML-KEM-768\"}' -o \"$key_dir/kem.jwk\""
+    elif [ "$require_kem" = "true" ]; then
+        rlFail "gen_tang_keys: ML-KEM-768 support is required by this test, but the installed jose does not provide it (jose PR #184)"
+        return 1
+    fi
+}
+
+gen_tang_cache() {
+    rlRun "/usr/libexec/tangd-update \"$1\" \"$2\""
+}
+
 # Starts the tangd process reliably and saves its PID for cleanup.
 start_tang_fn() {
     local i= cache="$1" port="$2"

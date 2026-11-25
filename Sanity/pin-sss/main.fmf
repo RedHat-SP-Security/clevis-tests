@@ -11,6 +11,7 @@ test: ./runtest.sh
 recommend:
   - clevis
   - tang
+  - jose
   - socat
   - expect
   - psmisc

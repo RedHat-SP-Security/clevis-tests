@@ -33,13 +33,6 @@
 legacy_tang() {
     test -x /usr/libexec/tangd-update
 }
-gen_tang_keys() {
-    rlRun "jose jwk gen -i '{\"alg\":\"ES512\"}' -o \"$1/sig.jwk\""
-    rlRun "jose jwk gen -i '{\"alg\":\"ECMR\"}' -o \"$1/exc.jwk\""
-}
-gen_tang_cache() {
-    rlRun "/usr/libexec/tangd-update \"$1\" \"$2\""
-}
 grep_b64() {
     rlRun "jose b64 dec -i \"$2\" -O - | grep -q \"$1\"" 0 \
         "File '$2' should contain '$1' when b64-decrypted" || \
