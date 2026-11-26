@@ -119,11 +119,13 @@ rlJournalStart
     rlPhaseStartTest "Phase 1: Perform ECMR key recovery via /rec/\$kid"
         rlLog "Generate an ephemeral EC key for the recovery request"
         rlRun "jose jwk gen -i '{\"alg\":\"ECMR\"}' -o ephem.jwk"
+        rlRun "jose jwk pub -i ephem.jwk -o ephem_pub.jwk" 0 \
+            "Extract the public part for the request"
 
-        rlLog "POST the ephemeral key to /rec/\$exc_kid"
+        rlLog "POST the ephemeral public key to /rec/\$exc_kid"
         rlRun "curl -sSf -X POST \
             -H 'Content-Type: application/jwk+json' \
-            -d @ephem.jwk \
+            -d @ephem_pub.jwk \
             -o rec_response.json \
             'http://localhost:$port/rec/$exc_kid'" 0 \
             "Recovery request to /rec/\$exc_kid succeeds"
@@ -149,10 +151,9 @@ rlJournalStart
     rlPhaseEnd
 
     rlPhaseStartTest "Phase 1: Verify ECMR recovery result is preserved"
-        rlLog "Compute expected recovery result independently"
+        rlLog "Compute the expected recovery result independently"
         rlLog "The server performs ECMR: rec = exc_priv * ephem_pub"
-        rlLog "We verify by completing the exchange: result = ephem_priv * rec"
-        rlLog "This must equal exc_priv * ephem_priv * G (the shared point)"
+        rlLog "Replicate that computation locally with our copy of the server key"
 
         # jose jwk exc expects a plain JWK: strip the extra tang_pub member
         # first, mirroring what clevis-decrypt-tang itself does with the
@@ -160,16 +161,22 @@ rlJournalStart
         rlRun "jq 'del(.tang_pub)' rec_response.json > rec_ec.jwk"
         rlRun "resp_kty=\$(jq -r '.kty' rec_ec.jwk)"
         rlAssertEquals "Recovery response kty is EC (backward compatible)" "$resp_kty" "EC"
+        jwk_is_public_only rec_ec.jwk
 
-        rlLog "Complete the ECMR exchange locally to verify the server's result"
-        rlRun "jose jwk exc -i ephem.jwk -I rec_ec.jwk -o local_shared.jwk" 0 "Local ECMR exchange with server recovery result succeeds"
+        # jose jwk exc is plain scalar multiplication (local private times
+        # remote public), so the expected /rec response is simply the same
+        # multiplication the server performs. Completing the exchange
+        # client-side instead (ephem_priv * rec) would yield
+        # ephem_priv^2 * exc_pub, which is why the real protocol blinds the
+        # request — see clevis-decrypt-tang.
+        rlRun "jose jwk exc -i '{\"alg\":\"ECMR\"}' \
+            -l tangd/db/exc.jwk -r ephem_pub.jwk -o expected_rec.jwk" 0 \
+            "Expected ECMR recovery result computed independently"
 
-        rlLog "Perform the same exchange using the original server key for comparison"
-        rlRun "jose jwk exc -i ephem.jwk -I tangd/db/exc.jwk -o expected_shared.jwk" 0 "Direct ECMR exchange with server key succeeds"
-
-        rlRun "local_thp=\$(jose jwk thp -i local_shared.jwk)"
-        rlRun "expected_thp=\$(jose jwk thp -i expected_shared.jwk)"
-        rlAssertEquals "ECMR recovery produces correct shared secret" "$local_thp" "$expected_thp"
+        rlRun "resp_thp=\$(jose jwk thp -i rec_ec.jwk)"
+        rlRun "expected_thp=\$(jose jwk thp -i expected_rec.jwk)"
+        rlAssertEquals "ECMR recovery produces the correct shared point" \
+            "$resp_thp" "$expected_thp"
     rlPhaseEnd
 
     # ------------------------------------------------------------------
