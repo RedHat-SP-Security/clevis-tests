@@ -1,0 +1,35 @@
+summary: Verify hybrid binding policy and reject fallback
+description: |
+    Verify explicit hybrid LUKS binding and unlock, reject recovery when 
+    its KEM key is unavailable while the classical path remains available, 
+    keep failed LUKS provisioning atomic, and ensure a tampered /version 
+    response cannot cause a classical fallback.
+contact: Patrik Koncity <pkoncity@redhat.com>
+component:
+  - clevis
+  - tang
+  - jose
+test: ./runtest.sh
+framework: beakerlib
+require:
+  - clevis
+  - clevis-luks
+  - clevis-pin-tang-pqc
+  - curl
+  - cryptsetup
+  - jose
+  - jq
+  - python3
+  - psmisc
+  - tang
+  - socat
+duration: 30m
+enabled: true
+tag:
+  - pqc
+  - hybrid
+adjust:
+  - enabled: false
+    when: distro < rhel-10.4 or distro < fedora-45
+    because: the hybrid PQC stack (clevis-pin-tang-pqc and ML-KEM-enabled tang and jose) is available from RHEL 10.4 and Fedora 45
+    continue: false

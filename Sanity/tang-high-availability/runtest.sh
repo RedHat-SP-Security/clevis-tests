@@ -30,43 +30,9 @@
 . /usr/bin/rhts-environment.sh || :
 . /usr/share/beakerlib/beakerlib.sh || exit 1
 
-legacy_tang() {
-    test -x /usr/libexec/tangd-update
-}
 # gen_tang_keys()/gen_tang_cache() come from TestHelpers/utils.sh (sourced
 # in Setup). These used to be local wrappers around tangd-keygen; they were
 # removed so that sourcing utils.sh cannot silently redefine them mid-run.
-grep_b64() {
-    rlRun "jose b64 dec -i \"$2\" -O - | grep -q \"$1\"" 0 \
-        "File '$2' should contain '$1' when b64-decrypted" || \
-            jose b64 dec -i "$2" -O -
-}
-start_tang() {
-    local i= cache="$1" port="$2"
-    if [ -z "$port" ]; then
-        for i in {8000..8999}; do
-            if ! fuser -s -n tcp "$i"; then
-                port="$i"
-                break
-            fi
-        done
-    fi
-    if [ -z "$port" ] || fuser -s -n tcp "$port"; then
-        rlLogFatal "no free port found for tangd: $port" 1>&2
-        return 1
-    fi
-    nohup socat "tcp-listen:$port,fork" exec:"/usr/libexec/tangd $cache" >/dev/null &
-    local pid=$!
-    rlWaitForSocket "$port" -p "$pid"
-    rlLogInfo "started tangd $cache as pid $pid on port $port" 1>&2
-    [ ! -t 1 ] && echo "$port"
-    return 0
-}
-stop_tang() {
-    rlRun "fuser -s -k \"$1/tcp\""
-}
-
-
 PACKAGE="clevis"
 
 rlJournalStart
@@ -83,12 +49,12 @@ rlJournalStart
             gen_tang_keys "tangd/db"
             gen_tang_cache "tangd/db" "tangd/cache"
             gen_tang_cache "tangd/db" "tangd/cache2"
-            port=$(start_tang "tangd/cache")
+            port=$(start_tang_http "tangd/cache")
         else
             rlRun "mkdir -p tangd/cache tangd/cache2"
             gen_tang_keys "tangd/cache"
             rlRun "cp -a tangd/cache/* tangd/cache2"
-            port=$(start_tang "tangd/cache")
+            port=$(start_tang_http "tangd/cache")
         fi
     rlPhaseEnd
 
@@ -97,15 +63,15 @@ rlJournalStart
         echo -n "testing data string" > plain
         rlRun "clevis encrypt tang '{ \"url\": \"http://localhost:$port\", \"adv\": \"adv.json\" }' < plain > enc"
         grep_b64 "http:" enc
-        stop_tang $port
-        start_tang "tangd/cache2" $port  # same port
+        rlRun "stop_tang_http '$port'" 0 "Stop first Tang server"
+        port=$(start_tang_http "tangd/cache2" "$port")
         rlRun "clevis decrypt < enc > plain2"
         rlAssertNotDiffer plain plain2
         rm -f adv plain enc plain2
     rlPhaseEnd
 
     rlPhaseStartCleanup
-        stop_tang $port
+        rlRun "stop_tang_http '$port'" 0 "Stop Tang server"
         rlRun "popd"
         rlRun "rm -r $TmpDir" 0 "Removing tmp directory"
     rlPhaseEnd

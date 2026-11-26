@@ -30,40 +30,6 @@
 . /usr/bin/rhts-environment.sh || :
 . /usr/share/beakerlib/beakerlib.sh || exit 1
 
-legacy_tang() {
-    test -x /usr/libexec/tangd-update
-}
-grep_b64() {
-    rlRun "jose b64 dec -i \"$2\" -O - | grep -q \"$1\"" 0 \
-        "File '$2' should contain '$1' when b64-decrypted" || \
-            jose b64 dec -i "$2" -O -
-}
-start_tang() {
-    local i= cache="$1" port="$2"
-    if [ -z "$port" ]; then
-        for i in {8000..8999}; do
-            if ! fuser -s -n tcp "$i"; then
-                port="$i"
-                break
-            fi
-        done
-    fi
-    if [ -z "$port" ] || fuser -s -n tcp "$port"; then
-        rlLogFatal "no free port found for tangd: $port" 1>&2
-        return 1
-    fi
-    nohup socat "tcp-listen:$port,fork" exec:"/usr/libexec/tangd $cache" >/dev/null &
-    local pid=$!
-    rlWaitForSocket "$port" -p "$pid"
-    rlLogInfo "started tangd $cache as pid $pid on port $port" 1>&2
-    [ ! -t 1 ] && echo "$port"
-    return 0
-}
-stop_tang() {
-    rlRun "fuser -s -k \"$1/tcp\""
-}
-
-
 PACKAGE="clevis"
 
 rlJournalStart
@@ -80,11 +46,11 @@ rlJournalStart
             rlRun "mkdir -p tangd/db tangd/cache"
             gen_tang_keys "tangd/db"
             gen_tang_cache "tangd/db" "tangd/cache"
-            port=$(start_tang "tangd/cache")
+            port=$(start_tang_http "tangd/cache")
         else
             rlRun "mkdir -p tangd/db"
             gen_tang_keys "tangd/db"
-            port=$(start_tang "tangd/db")
+            port=$(start_tang_http "tangd/db")
         fi
     rlPhaseEnd
 
@@ -132,7 +98,7 @@ CLEVIS_END
     luks_destroy
 
     rlPhaseStartCleanup
-        stop_tang "$port"
+        rlRun "stop_tang_http '$port'" 0 "Stop local Tang server"
         rlRun "popd"
         rlRun "rm -r $TmpDir" 0 "Removing tmp directory"
     rlPhaseEnd
