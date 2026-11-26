@@ -48,7 +48,7 @@ extra-summary: /CoreOS/clevis/Sanity/tang-pub-binding
 extra-task: /CoreOS/clevis/Sanity/tang-pub-binding
 adjust:
   - enabled: false
-    when: distro < rhel-9
+    when: distro < rhel-10
     continue: false
   - enabled: false
     when: distro < fedora-45
