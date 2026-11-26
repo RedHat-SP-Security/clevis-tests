@@ -236,8 +236,13 @@ _tang_free_port() {
     python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()'
 }
 
-_tang_http_remember_pid() { # PORT PID
-    _TANG_HTTP_PIDS="${_TANG_HTTP_PIDS:+${_TANG_HTTP_PIDS} }$1=$2"
+_tang_http_remember_pid() { # PORT PID — replaces any earlier entry for PORT
+    local port="$1" pid="$2" entry rebuilt=""
+    for entry in $_TANG_HTTP_PIDS; do
+        [ "${entry%%=*}" = "$port" ] && continue
+        rebuilt="${rebuilt:+${rebuilt} }${entry}"
+    done
+    _TANG_HTTP_PIDS="${rebuilt:+${rebuilt} }${port}=${pid}"
 }
 
 _tang_http_pid_for() { # PORT -> echoes PID, fails when unknown
@@ -251,37 +256,12 @@ _tang_http_pid_for() { # PORT -> echoes PID, fails when unknown
     return 1
 }
 
-# Starts a plain-HTTP tangd listener. The key database/cache ($1) must
-# already exist. Optional arguments: an explicit port ($2) and a log file
-# ($3). The chosen port is echoed (so port=$(start_tang_http ...) works)
-# and also stored in the global TANG_HTTP_PORT.
-#
-# Call this helper DIRECTLY (start_tang_http dir; port=$TANG_HTTP_PORT)
-# rather than inside a command substitution: $(...) runs the helper in a
-# subshell, which discards the PID bookkeeping stop_tang_http relies on
-# and forces it back onto the by-port fallback.
-start_tang_http() {
-    local cache="$1" requested_port="${2:-}" log_file="${3:-}"
-    local port pid tangd
-
-    tangd="$(command -v tangd 2>/dev/null || true)"
-    [ -n "$tangd" ] || tangd=/usr/libexec/tangd
-    if [ ! -x "$tangd" ]; then
-        rlLogFatal "tangd executable not found" 1>&2
-        return 1
-    fi
-
-    if [ -n "$requested_port" ]; then
-        if fuser -s -n tcp "$requested_port" 2>/dev/null; then
-            rlLogFatal "Tang port $requested_port is already in use" 1>&2
-            return 1
-        fi
-        port="$requested_port"
-    else
-        # Ephemeral port instead of a fixed-range scan: no collisions
-        # between concurrent test runs racing over the same port range.
-        port="$(_tang_free_port)" || return 1
-    fi
+# Starts socat + tangd on an exact port. Returns non-zero when the
+# listener fails to come up (bind race, tangd crash). Records the PID for
+# stop_tang_http, stores the port in the global TANG_HTTP_PORT, and
+# echoes the port for command-substitution callers.
+_start_tang_http_on_port() { # CACHE PORT LOGFILE TANGD
+    local cache="$1" port="$2" log_file="$3" tangd="$4" pid
 
     # Bind to 127.0.0.1 only, so the temporary unauthenticated tangd is
     # not reachable from other machines when the test host is networked.
@@ -306,6 +286,51 @@ start_tang_http() {
     rlLogInfo "started tangd $cache as pid $pid on 127.0.0.1:$port" 1>&2
     [ ! -t 1 ] && echo "$port"
     return 0
+}
+
+# Starts a plain-HTTP tangd listener. The key database/cache ($1) must
+# already exist. Optional arguments: an explicit port ($2) and a log file
+# ($3). The chosen port is echoed (so port=$(start_tang_http ...) works)
+# and also stored in the global TANG_HTTP_PORT.
+#
+# Call this helper DIRECTLY (start_tang_http dir; port=$TANG_HTTP_PORT)
+# rather than inside a command substitution: $(...) runs the helper in a
+# subshell, which discards the PID bookkeeping stop_tang_http relies on
+# and forces it back onto the by-port fallback.
+start_tang_http() {
+    local cache="$1" requested_port="${2:-}" log_file="${3:-}"
+    local port tangd attempt
+
+    tangd="$(command -v tangd 2>/dev/null || true)"
+    [ -n "$tangd" ] || tangd=/usr/libexec/tangd
+    if [ ! -x "$tangd" ]; then
+        rlLogFatal "tangd executable not found" 1>&2
+        return 1
+    fi
+
+    if [ -n "$requested_port" ]; then
+        if fuser -s -n tcp "$requested_port" 2>/dev/null; then
+            rlLogFatal "Tang port $requested_port is already in use" 1>&2
+            return 1
+        fi
+        _start_tang_http_on_port "$cache" "$requested_port" "$log_file" "$tangd"
+        return $?
+    fi
+
+    # Ephemeral port instead of a fixed-range scan: no collisions
+    # between concurrent test runs racing over the same port range.
+    # There is a small window between _tang_free_port releasing the
+    # socket and socat binding it; if another process grabs the port
+    # in that window, retry with a fresh one instead of failing.
+    for attempt in 1 2 3; do
+        port="$(_tang_free_port)" || return 1
+        if _start_tang_http_on_port "$cache" "$port" "$log_file" "$tangd"; then
+            return 0
+        fi
+        rlLogInfo "tangd failed to bind ephemeral port $port (attempt $attempt); retrying" 1>&2
+    done
+    rlLogFatal "tangd failed to start on an ephemeral port after $attempt attempts" 1>&2
+    return 1
 }
 
 # Stops a tangd started by start_tang_http. Kills only the socat listener

@@ -48,6 +48,25 @@ jwk_is_public_only() {
         "JWK should not contain private members (d, priv, k)"
 }
 
+# luks_destroy can leave the loop device attached when a mapper is still
+# open (losetup -d fails, device busy). Close our mappers and retry the
+# detach, so the next luks_setup cannot overwrite the sole lodev variable
+# while a device from the previous phase is still attached — that would
+# leak the first device past cleanup.
+luks_destroy_checked() {
+    luks_destroy
+    if [ -n "${MAPPER:-}" ] && cryptsetup status "${MAPPER}" >/dev/null 2>&1; then
+        rlRun "cryptsetup close \"\${MAPPER}\"" 0 "Closing mapper left open after luks_destroy"
+    fi
+    if [ -n "${MAPPER_LEGACY:-}" ] && cryptsetup status "${MAPPER_LEGACY}" >/dev/null 2>&1; then
+        rlRun "cryptsetup close \"\${MAPPER_LEGACY}\"" 0 "Closing legacy mapper left open after luks_destroy"
+    fi
+    local leftover
+    for leftover in $(losetup -l -j "${TmpDir}/loopfile" -O NAME --noheadings 2>/dev/null); do
+        rlRun "losetup -d \"\${leftover}\"" 0 "Retrying detach of \${leftover} after mapper close"
+    done
+}
+
 PACKAGE="clevis"
 SKIP_TEST=false
 
@@ -56,7 +75,7 @@ rlJournalStart
         rlRun "rpm -q $PACKAGE || which clevis" 0 "Checking for the presence of clevis rpm"
         rlRun ". ../../TestHelpers/utils.sh" || rlDie "cannot import function script"
         rlRun "TmpDir=\$(mktemp -d)" 0 "Creating tmp directory" || rlDie "mktemp failed"
-        rlRun "pushd $TmpDir" || rlDie "cannot enter $TmpDir"
+        rlRun "pushd \"\$TmpDir\"" || rlDie "cannot enter $TmpDir"
         # Public-only attacker key injected by the tamper-tang-pub proxy mode.
         FAKE_KEY_FILE="${TmpDir}/fake_pub.jwk"
     rlPhaseEnd
@@ -81,6 +100,11 @@ rlJournalStart
     rlPhaseStartTest "Capability check: tang returns tang_pub in /rec"
         rlRun "exc_kid=\$(jose jwk thp -i tangd/db/exc.jwk)"
         rlRun "jose jwk gen -i '{\"alg\":\"ECMR\"}' -o probe_ephem.jwk"
+        # Post only the public part, as a real client does — a tang that
+        # rejects JWKs carrying private members must not be misreported
+        # as lacking tang_pub support.
+        rlRun "jose jwk pub -i probe_ephem.jwk -o probe_ephem_pub.jwk" 0 \
+            "Extract the public part for the probe"
 
         # Distinguish an old tang (no tang_pub support — legitimate skip)
         # from a tang that claims the capability via /version but fails to
@@ -96,21 +120,27 @@ rlJournalStart
         fi
 
         PROBE_HTTP_CODE="$(curl -sS -X POST -H 'Content-Type: application/jwk+json' \
-            -d @probe_ephem.jwk -o probe_rec.json -w '%{http_code}' \
+            -d @probe_ephem_pub.jwk -o probe_rec.json -w '%{http_code}' \
             "http://localhost:$port/rec/$exc_kid" 2>/dev/null)"
         if [ "$PROBE_HTTP_CODE" = "200" ] \
             && jq -e '(.tang_pub | type) == "object"' probe_rec.json >/dev/null 2>&1; then
             rlPass "tang build returns tang_pub in /rec responses"
-        elif [ "$VERSION_TANG_PUB" = "true" ]; then
-            # /version advertises tang_pub but /rec does not deliver it.
-            # Record the failure and skip the remaining phases so the
-            # result shows one clear regression instead of twenty
-            # cascading assertion failures.
-            rlFail "tang advertises tang_pub in /version but /rec does not deliver it (HTTP $PROBE_HTTP_CODE) — regression"
+        elif [ "$VERSION_HTTP_CODE" != "200" ]; then
+            # No /version endpoint at all — genuinely old tang (the rebase
+            # with tang_pub support has not landed in this build). This is
+            # the only legitimate skip: the fmf enables the test on
+            # rhel-10+/fedora-45+ only, where older tang builds may still
+            # be present in early composes.
+            rlLogWarning "tang build has no /version endpoint (HTTP $VERSION_HTTP_CODE) — old tang without tang_pub support"
+            rlLogWarning "/rec probe returned HTTP $PROBE_HTTP_CODE; skipping the tang_pub phases"
             SKIP_TEST=true
         else
-            rlLogWarning "tang build does not support tang_pub (/version HTTP $VERSION_HTTP_CODE, /rec HTTP $PROBE_HTTP_CODE)"
-            rlLogWarning "this test requires a tang build with tang_pub support; skipping"
+            # /version is present but either does not advertise tang_pub or
+            # /rec does not deliver it. On the platforms this test targets
+            # tang_pub is mandatory, so both mean a regression — fail
+            # rather than shipping a green skip. SKIP_TEST keeps the output
+            # to one clear failure instead of cascading assertion errors.
+            rlFail "tang /version present but tang_pub not delivered (flag: $VERSION_TANG_PUB, /rec HTTP $PROBE_HTTP_CODE) — regression"
             SKIP_TEST=true
         fi
     rlPhaseEnd
@@ -216,7 +246,8 @@ rlJournalStart
     # The LUKS device is created (and destroyed afterwards) by the shared
     # luks_setup()/luks_destroy() helpers from utils.sh. They open their own
     # phases, so they must be called at journal top level, never inside
-    # another phase.
+    # another phase. luks_destroy_checked additionally closes stray
+    # mappers and retries the detach.
     luks_setup
 
     rlPhaseStartTest "Phase 2: New binding stores no advertisement and unlocks"
@@ -240,7 +271,7 @@ rlJournalStart
         rlRun "cryptsetup close ${MAPPER}" 0 "Close verification mapper"
     rlPhaseEnd
 
-    luks_destroy
+    luks_destroy_checked
 
     # ------------------------------------------------------------------
     # Phase 3 — Legacy-format binding migration
@@ -292,7 +323,7 @@ rlJournalStart
         rlRun "cryptsetup close ${MAPPER_LEGACY}" 0 "Close legacy mapper"
     rlPhaseEnd
 
-    luks_destroy
+    luks_destroy_checked
 
     # ------------------------------------------------------------------
     # Phase 4 — Returned-key identifier mismatch (clevis-driven)
@@ -301,7 +332,7 @@ rlJournalStart
     rlPhaseStartTest "Phase 4: tang_pub consumed when genuine, rejected when mismatched"
         rlLog "Generate an attacker ECMR key (public-only, as a MITM would inject)"
         rlRun "jose jwk gen -i '{\"alg\":\"ECMR\"}' -o fake_exc.jwk"
-        rlRun "jose jwk pub -i fake_exc.jwk -o ${FAKE_KEY_FILE}"
+        rlRun "jose jwk pub -i fake_exc.jwk -o \"\${FAKE_KEY_FILE}\""
         rlRun "fake_kid=\$(jose jwk thp -i fake_exc.jwk)"
         rlAssertNotEquals "Attacker key thumbprint differs from real exc key" \
             "$fake_kid" "$exc_kid"
@@ -368,14 +399,20 @@ rlJournalStart
         if [ -n "${MAPPER_LEGACY}" ] && cryptsetup status "${MAPPER_LEGACY}" >/dev/null 2>&1; then
             rlRun "cryptsetup close ${MAPPER_LEGACY}" 0 "Closing legacy mapper left open"
         fi
-        # Fallback only: luks_destroy already ran between phases; detach the
-        # loop device if a phase crashed midway. Do not call luks_destroy
-        # here — it opens its own phase, which cannot nest inside Cleanup.
-        if [ -n "$lodev" ] && losetup -l -O NAME | grep -qx "$lodev"; then
-            rlRun "losetup -d \"\$lodev\"" 0 "Detaching leftover loop device"
+        # Fallback only: luks_destroy_checked already ran between phases.
+        # If a phase still crashed midway, detach every loop device still
+        # backed by this test's loopfile — matched by backing file, never
+        # by device name, so a recycled loop-device name belonging to
+        # another test is never detached. Do not call luks_destroy here —
+        # it opens its own phase, which cannot nest inside Cleanup.
+        if [ -e "${TmpDir}/loopfile" ]; then
+            leftover_devices="$(losetup -l -j "${TmpDir}/loopfile" -O NAME --noheadings 2>/dev/null)"
+            for leftover in ${leftover_devices}; do
+                rlRun "losetup -d \"\${leftover}\"" 0 "Detaching leftover loop device \${leftover}"
+            done
         fi
         rlRun "popd"
-        rlRun "rm -r $TmpDir" 0 "Removing tmp directory"
+        rlRun "rm -r \"\$TmpDir\"" 0 "Removing tmp directory"
     rlPhaseEnd
 rlJournalPrintText
 rlJournalEnd
