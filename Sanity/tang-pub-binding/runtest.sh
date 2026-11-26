@@ -26,24 +26,7 @@
 #   Boston, MA 02110-1301, USA.
 #
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-#
-# Test flow (ECMR only — independent of ML-KEM):
-#   Capability: skip with a clear message when the tang build does not
-#               return tang_pub in /rec responses (non-PQC tang).
-#   Phase 1: /rec/$kid returns tang_pub — public-only, matching the
-#            advertised ECMR key; ECMR recovery semantics preserved.
-#   Phase 2: bindings created against a tang_pub-capable server do not
-#            persist the Tang advertisement (asserted on the JWE from
-#            LUKS2 token metadata) and unlock functionally.
-#   Phase 3: a legacy-format binding (stored advertisement, created by
-#            hiding /version so clevis falls back to adv storage, exactly
-#            what pre-tang_pub clevis produced) is migrated by
-#            clevis luks regen and unlocks afterwards.
-#   Phase 4: a tampered tang_pub returned in-flight by a MITM proxy is
-#            never used by clevis decrypt (pinned-kid lookup); with no
-#            /adv fallback available, decrypt fails closed.
 
-. /usr/bin/rhts-environment.sh || :
 . /usr/share/beakerlib/beakerlib.sh || exit 1
 
 # tangd startup/shutdown (start_tang_http/stop_tang_http), the fault
@@ -61,7 +44,7 @@
 jwk_is_public_only() {
     local jwk="$1"
     rlRun "jq -e '.d // .priv // .k' \"$jwk\" >/dev/null 2>&1" 1 \
-        "JWK should not contain private components (d, priv, k)"
+        "JWK should not contain private members (d, priv, k)"
 }
 
 PACKAGE="clevis"
@@ -77,7 +60,7 @@ rlJournalStart
         FAKE_KEY_FILE="${TmpDir}/fake_pub.jwk"
     rlPhaseEnd
 
-    rlPhaseStart FAIL "tangd setup"
+    rlPhaseStartTest "tangd setup"
         if legacy_tang; then
             rlRun "mkdir -p tangd/db tangd/cache"
             gen_tang_keys "tangd/db"
@@ -115,7 +98,7 @@ rlJournalStart
     # Phase 1 — /rec/$kid includes tang_pub
     # ------------------------------------------------------------------
 
-    rlPhaseStart FAIL "Phase 1: Fetch advertisement and extract ECMR exchange key"
+    rlPhaseStartTest "Phase 1: Fetch advertisement and extract ECMR exchange key"
         rlRun "curl -sSf -o adv.json 'http://localhost:$port/adv'"
         rlRun "jq . adv.json" 0 "Advertisement is valid JSON"
 
@@ -128,13 +111,12 @@ rlJournalStart
         rlRun "adv_exc_jwk=\$(jq -e \
             '.keys[] | select(.kty == \"EC\" and (.key_ops[]? == \"deriveKey\"))' \
             adv_payload.json)" 0 "Found EC exchange key in advertisement"
-        rlRun "adv_thp=\$(printf '%s' \"\$adv_exc_jwk\" | jose jwk thp -i-)" \
-            0 "Advertised exchange key thumbprint computed"
+        rlRun "adv_thp=\$(printf '%s' \"\$adv_exc_jwk\" | jose jwk thp -i-)" 0 "Advertised exchange key thumbprint computed"
         rlAssertEquals "Advertised ECMR key matches on-disk exc key" \
             "$adv_thp" "$exc_kid"
     rlPhaseEnd
 
-    rlPhaseStart FAIL "Phase 1: Perform ECMR key recovery via /rec/\$kid"
+    rlPhaseStartTest "Phase 1: Perform ECMR key recovery via /rec/\$kid"
         rlLog "Generate an ephemeral EC key for the recovery request"
         rlRun "jose jwk gen -i '{\"alg\":\"ECMR\"}' -o ephem.jwk"
 
@@ -149,7 +131,7 @@ rlJournalStart
         rlRun "jq . rec_response.json" 0 "Recovery response is valid JSON"
     rlPhaseEnd
 
-    rlPhaseStart FAIL "Phase 1: Verify tang_pub in recovery response"
+    rlPhaseStartTest "Phase 1: Verify tang_pub in recovery response"
         rlLog "Check that tang_pub is present and is a JSON object"
         rlRun "jq -e 'if (.tang_pub | type) == \"object\" then .tang_pub else null end' \
             rec_response.json > tang_pub.jwk" 0 \
@@ -163,11 +145,10 @@ rlJournalStart
 
         rlLog "Verify tang_pub matches the requested ECMR key identifier"
         rlRun "tang_pub_thp=\$(jose jwk thp -i tang_pub.jwk)"
-        rlAssertEquals "tang_pub thumbprint matches exc key thumbprint" \
-            "$tang_pub_thp" "$exc_kid"
+        rlAssertEquals "tang_pub thumbprint matches exc key thumbprint" "$tang_pub_thp" "$exc_kid"
     rlPhaseEnd
 
-    rlPhaseStart FAIL "Phase 1: Verify ECMR recovery result is preserved"
+    rlPhaseStartTest "Phase 1: Verify ECMR recovery result is preserved"
         rlLog "Compute expected recovery result independently"
         rlLog "The server performs ECMR: rec = exc_priv * ephem_pub"
         rlLog "We verify by completing the exchange: result = ephem_priv * rec"
@@ -178,35 +159,30 @@ rlJournalStart
         # /rec response.
         rlRun "jq 'del(.tang_pub)' rec_response.json > rec_ec.jwk"
         rlRun "resp_kty=\$(jq -r '.kty' rec_ec.jwk)"
-        rlAssertEquals "Recovery response kty is EC (backward compatible)" \
-            "$resp_kty" "EC"
+        rlAssertEquals "Recovery response kty is EC (backward compatible)" "$resp_kty" "EC"
 
         rlLog "Complete the ECMR exchange locally to verify the server's result"
-        rlRun "jose jwk exc -i ephem.jwk -I rec_ec.jwk -o local_shared.jwk" 0 \
-            "Local ECMR exchange with server recovery result succeeds"
+        rlRun "jose jwk exc -i ephem.jwk -I rec_ec.jwk -o local_shared.jwk" 0 "Local ECMR exchange with server recovery result succeeds"
 
         rlLog "Perform the same exchange using the original server key for comparison"
-        rlRun "jose jwk exc -i ephem.jwk -I tangd/db/exc.jwk -o expected_shared.jwk" 0 \
-            "Direct ECMR exchange with server key succeeds"
+        rlRun "jose jwk exc -i ephem.jwk -I tangd/db/exc.jwk -o expected_shared.jwk" 0 "Direct ECMR exchange with server key succeeds"
 
         rlRun "local_thp=\$(jose jwk thp -i local_shared.jwk)"
         rlRun "expected_thp=\$(jose jwk thp -i expected_shared.jwk)"
-        rlAssertEquals "ECMR recovery produces correct shared secret" \
-            "$local_thp" "$expected_thp"
+        rlAssertEquals "ECMR recovery produces correct shared secret" "$local_thp" "$expected_thp"
     rlPhaseEnd
 
     # ------------------------------------------------------------------
     # Phase 2 — tang_pub not persisted in new bindings
     # ------------------------------------------------------------------
 
-    rlPhaseStart FAIL "Phase 2: Setup LUKS device"
-        rlRun "dd if=/dev/zero of=loopfile bs=100M count=1"
-        rlRun "lodev=\$(losetup -f --show loopfile)"
-        echo -n redhat123 > pwfile
-        rlRun "cryptsetup luksFormat --batch-mode --key-file pwfile \"\$lodev\""
-    rlPhaseEnd
+    # The LUKS device is created (and destroyed afterwards) by the shared
+    # luks_setup()/luks_destroy() helpers from utils.sh. They open their own
+    # phases, so they must be called at journal top level, never inside
+    # another phase.
+    luks_setup
 
-    rlPhaseStart FAIL "Phase 2: New binding stores no advertisement and unlocks"
+    rlPhaseStartTest "Phase 2: New binding stores no advertisement and unlocks"
         rlRun "thp=\$(jose jwk thp -i tangd/db/sig.jwk)"
 
         rlLog "Bind LUKS device to Tang"
@@ -214,36 +190,28 @@ rlJournalStart
             '{\"url\":\"http://localhost:$port\",\"thp\":\"$thp\"}'"
 
         rlLog "Assert on the persisted JWE from the LUKS2 token metadata"
-        rlRun "save_clevis_jwe \"\$lodev\" new_binding.jwe" \
-            0 "Extract clevis JWE from LUKS2 token metadata"
-        rlRun "save_jwe_header new_binding.jwe new_hdr.json" \
-            0 "Decode new binding protected header"
-        rlRun "jq -e '.clevis.tang.url != null' new_hdr.json" 0 \
-            "Binding config is present in the JWE header"
-        rlRun "jq -e '.clevis.tang.adv == null' new_hdr.json" 0 \
-            "New binding does not store the Tang advertisement"
-        rlRun "jq -e '.clevis.tang.tang_pub == null' new_hdr.json" 0 \
-            "New binding does not store tang_pub"
-        rlRun "jq -e --arg kid \"\$exc_kid\" '.kid == \$kid' new_hdr.json" 0 \
-            "New binding pins the ECMR key thumbprint (kid)"
+        rlRun "save_clevis_jwe \"\$lodev\" new_binding.jwe" 0 "Extract clevis JWE from LUKS2 token metadata"
+        rlRun "save_jwe_header new_binding.jwe new_hdr.json" 0 "Decode new binding protected header"
+        rlRun "jq -e '.clevis.tang.url != null' new_hdr.json" 0 "Binding config is present in the JWE header"
+        rlRun "jq -e '.clevis.tang.adv == null' new_hdr.json" 0 "New binding does not store the Tang advertisement"
+        rlRun "jq -e '.clevis.tang.tang_pub == null' new_hdr.json" 0 "New binding does not store tang_pub"
+        rlRun "jq -e --arg kid \"\$exc_kid\" '.kid == \$kid' new_hdr.json" 0 "New binding pins the ECMR key thumbprint (kid)"
 
         rlLog "Functional verification: unlock through the tang_pub recovery path"
         MAPPER="tangpub-p2-$$"
-        rlRun "clevis luks unlock -d \"\$lodev\" -n ${MAPPER}" 0 \
-            "LUKS unlock via tang_pub recovery path succeeds"
+        rlRun "clevis luks unlock -d \"\$lodev\" -n ${MAPPER}" 0 "LUKS unlock via tang_pub recovery path succeeds"
         rlRun "cryptsetup close ${MAPPER}" 0 "Close verification mapper"
     rlPhaseEnd
+
+    luks_destroy
 
     # ------------------------------------------------------------------
     # Phase 3 — Legacy-format binding migration
     # ------------------------------------------------------------------
 
-    rlPhaseStart FAIL "Phase 3: Create a legacy-format binding with stored advertisement"
-        rlRun "dd if=/dev/zero of=loopfile_legacy bs=100M count=1"
-        rlRun "lodev_legacy=\$(losetup -f --show loopfile_legacy)"
-        echo -n redhat123 > pwfile_legacy
-        rlRun "cryptsetup luksFormat --batch-mode --key-file pwfile_legacy \"\$lodev_legacy\""
+    luks_setup
 
+    rlPhaseStartTest "Phase 3: Create a legacy-format binding with stored advertisement"
         # Pre-tang_pub clevis always stored the whole advertisement under
         # clevis.tang.adv in the JWE protected header. Current clevis still
         # produces exactly this format whenever the server does not report
@@ -251,52 +219,45 @@ rlJournalStart
         # proxy yields a genuine legacy-format binding without needing an
         # old clevis build.
         printf 'block-version\n' > "${TANG_PROXY_MODE_FILE}"
-        rlRun "clevis luks bind -f -k pwfile_legacy -d \"\$lodev_legacy\" tang \
+        rlRun "clevis luks bind -f -k pwfile -d \"\$lodev\" tang \
             '{\"url\":\"http://localhost:${TANG_PROXY_PORT}\",\"thp\":\"$thp\"}'"
 
-        rlRun "save_clevis_jwe \"\$lodev_legacy\" legacy_binding.jwe" \
-            0 "Extract legacy binding JWE from LUKS2 token metadata"
-        rlRun "save_jwe_header legacy_binding.jwe legacy_hdr.json" \
-            0 "Decode legacy binding protected header"
-        rlRun "jq -e '.clevis.tang.adv != null' legacy_hdr.json" 0 \
-            "Legacy-format binding stores the Tang advertisement"
+        rlRun "save_clevis_jwe \"\$lodev\" legacy_binding.jwe" 0 "Extract legacy binding JWE from LUKS2 token metadata"
+        rlRun "save_jwe_header legacy_binding.jwe legacy_hdr.json" 0 "Decode legacy binding protected header"
+        rlRun "jq -e '.clevis.tang.adv != null' legacy_hdr.json" 0 "Legacy-format binding stores the Tang advertisement"
         rlRun "jq -j '.clevis.tang.adv' legacy_hdr.json > legacy_adv_keys.json"
-        rlRun "jose jwk thp -i legacy_adv_keys.json -f \"\$exc_kid\"" 0 \
-            "Stored advertisement contains the ECMR key matching kid"
+        rlRun "jose jwk thp -i legacy_adv_keys.json -f \"\$exc_kid\"" 0 "Stored advertisement contains the ECMR key matching kid"
     rlPhaseEnd
 
-    rlPhaseStart FAIL "Phase 3: Regenerate legacy binding and verify migration"
+    rlPhaseStartTest "Phase 3: Regenerate legacy binding and verify migration"
         # NOTE: the test strategy also expects clevis to *warn* about a
         # stored advertisement when reading a legacy binding. Current
         # clevis does not emit such a warning, so it is not asserted here;
         # the functional migration (regen drops the stored adv) is.
         printf 'passthrough\n' > "${TANG_PROXY_MODE_FILE}"
-        rlRun "legacy_slot=\$(clevis luks list -d \"\$lodev_legacy\" \
+        rlRun "legacy_slot=\$(clevis luks list -d \"\$lodev\" \
             | head -1 | cut -d: -f1 | tr -d ' ')" 0 "Discover legacy binding slot"
-        rlRun "clevis luks regen -d \"\$lodev_legacy\" -s \"\$legacy_slot\" -q" 0 \
+        rlRun "clevis luks regen -d \"\$lodev\" -s \"\$legacy_slot\" -q" 0 \
             "Regenerate legacy binding against tang_pub-capable server"
 
-        rlRun "save_clevis_jwe \"\$lodev_legacy\" regen_binding.jwe" \
-            0 "Extract regenerated binding JWE from LUKS2 token metadata"
-        rlRun "save_jwe_header regen_binding.jwe regen_hdr.json" \
-            0 "Decode regenerated binding protected header"
-        rlRun "jq -e '.clevis.tang.adv == null' regen_hdr.json" 0 \
-            "Regenerated binding no longer stores the advertisement"
-        rlRun "jq -e '.clevis.tang.tang_pub == null' regen_hdr.json" 0 \
-            "Regenerated binding does not store tang_pub"
+        rlRun "save_clevis_jwe \"\$lodev\" regen_binding.jwe" 0 "Extract regenerated binding JWE from LUKS2 token metadata"
+        rlRun "save_jwe_header regen_binding.jwe regen_hdr.json" 0 "Decode regenerated binding protected header"
+        rlRun "jq -e '.clevis.tang.adv == null' regen_hdr.json" 0 "Regenerated binding no longer stores the advertisement"
+        rlRun "jq -e '.clevis.tang.tang_pub == null' regen_hdr.json" 0 "Regenerated binding does not store tang_pub"
 
         rlLog "Functional verification: unlock the regenerated binding"
         MAPPER_LEGACY="tangpub-p3-$$"
-        rlRun "clevis luks unlock -d \"\$lodev_legacy\" -n ${MAPPER_LEGACY}" 0 \
-            "Regenerated binding unlocks successfully"
+        rlRun "clevis luks unlock -d \"\$lodev\" -n ${MAPPER_LEGACY}" 0 "Regenerated binding unlocks successfully"
         rlRun "cryptsetup close ${MAPPER_LEGACY}" 0 "Close legacy mapper"
     rlPhaseEnd
+
+    luks_destroy
 
     # ------------------------------------------------------------------
     # Phase 4 — Returned-key identifier mismatch (clevis-driven)
     # ------------------------------------------------------------------
 
-    rlPhaseStart FAIL "Phase 4: Mismatched tang_pub is never used by clevis"
+    rlPhaseStartTest "Phase 4: Mismatched tang_pub is never used by clevis"
         rlLog "Generate an attacker ECMR key (public-only, as a MITM would inject)"
         rlRun "jose jwk gen -i '{\"alg\":\"ECMR\"}' -o fake_exc.jwk"
         rlRun "jose jwk pub -i fake_exc.jwk -o ${FAKE_KEY_FILE}"
@@ -347,11 +308,11 @@ rlJournalStart
         if [ -n "${MAPPER_LEGACY}" ] && cryptsetup status "${MAPPER_LEGACY}" >/dev/null 2>&1; then
             rlRun "cryptsetup close ${MAPPER_LEGACY}" 0 "Closing legacy mapper left open"
         fi
-        if [ -n "$lodev" ]; then
-            rlRun "losetup -d \"\$lodev\"" 0,5 "Detaching loop device"
-        fi
-        if [ -n "$lodev_legacy" ]; then
-            rlRun "losetup -d \"\$lodev_legacy\"" 0,5 "Detaching legacy loop device"
+        # Fallback only: luks_destroy already ran between phases; detach the
+        # loop device if a phase crashed midway. Do not call luks_destroy
+        # here — it opens its own phase, which cannot nest inside Cleanup.
+        if [ -n "$lodev" ] && losetup -l -O NAME | grep -qx "$lodev"; then
+            rlRun "losetup -d \"\$lodev\"" 0 "Detaching leftover loop device"
         fi
         rlRun "popd"
         rlRun "rm -r $TmpDir" 0 "Removing tmp directory"
