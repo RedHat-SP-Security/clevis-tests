@@ -19,12 +19,6 @@ CRYPTO_ALG=${CRYPTO_ALG:-RSA}
 # Use the Process ID to create a unique name for the trusted certificate
 UNIQUE_CERT_FILE="temp-tang-cert-$$.crt"
 
-grep_b64() {
-    rlRun "jose b64 dec -i \"$2\" -O - | grep -q \"$1\"" 0 \
-        "File '$2' should contain '$1' when b64-decrypted" || \
-            jose b64 dec -i "$2" -O -
-}
-
 # Copies the certificate to the system trust store with a unique name.
 trust_cert() {
     rlRun "cp server.crt /etc/pki/ca-trust/source/anchors/$UNIQUE_CERT_FILE"

@@ -13,13 +13,6 @@
 . /usr/bin/rhts-environment.sh || :
 . /usr/share/beakerlib/beakerlib.sh || exit 1
 
-# Decrypts a base64 encoded file and checks for a string.
-grep_b64() {
-    rlRun "jose b64 dec -i \"$2\" -O - | grep -q \"$1\"" 0 \
-        "File '$2' should contain '$1' when b64-decrypted" || \
-            jose b64 dec -i "$2" -O -
-}
-
 # Copies server certificates to the system trust store.
 trust_certs() {
     rlRun "cp server_ecdsa.crt /etc/pki/ca-trust/source/anchors/temp-tang-ecdsa-$$.crt"

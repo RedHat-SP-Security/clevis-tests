@@ -434,3 +434,10 @@ save_clevis_jwe() {
 save_jwe_header() {
     jq -j '.protected' "$1" | jose b64 dec -i- > "$2"
 }
+
+# Asserts that the base64-decoded content of FILE ($2) contains STRING
+# ($1). On failure the decoded content is printed to the test log, which
+# makes payload mismatches easier to diagnose than a bare grep failure.
+grep_b64() {
+    rlRun "jose b64 dec -i \"$2\" -O - | grep -q \"$1\"" 0 "File '$2' should contain '$1' when b64-decrypted" || jose b64 dec -i "$2" -O -
+}

@@ -32,43 +32,9 @@
 
 # TODO: rewrite this test to use non-tang pins, possibly
 #       a local-key-file pin or something
-legacy_tang() {
-    test -x /usr/libexec/tangd-update
-}
 # gen_tang_keys()/gen_tang_cache() come from TestHelpers/utils.sh (sourced
 # in Setup). These used to be local wrappers around tangd-keygen; they were
 # removed so that sourcing utils.sh cannot silently redefine them mid-run.
-grep_b64() {
-    rlRun "jose b64 dec -i \"$2\" -O - | grep -q \"$1\"" 0 \
-        "File '$2' should contain '$1' when b64-decrypted" || \
-            jose b64 dec -i "$2" -O -
-}
-start_tang() {
-    local i= cache="$1" port="$2"
-    if [ -z "$port" ]; then
-        for i in {8020..8999}; do
-            if ! fuser -s -n tcp "$i"; then
-                port="$i"
-                break
-            fi
-        done
-    fi
-    if [ -z "$port" ] || fuser -s -n tcp "$port"; then
-        rlLogFatal "no free port found for tangd: $port" 1>&2
-        return 1
-    fi
-    nohup socat "tcp-listen:$port,fork" exec:"/usr/libexec/tangd $cache" >/dev/null &
-    local pid=$!
-    rlWaitForSocket "$port" -p "$pid"
-    rlLogInfo "started tangd $cache as pid $pid on port $port" 1>&2
-    [ ! -t 1 ] && echo "$port"
-    return 0
-}
-stop_tang() {
-    rlRun "fuser -s -k \"$1/tcp\""
-}
-
-
 PACKAGE="clevis"
 
 rlJournalStart
@@ -95,17 +61,17 @@ rlJournalStart
             gen_tang_cache "tangd/db2" "tangd/cache2"
             gen_tang_keys "tangd/db3"
             gen_tang_cache "tangd/db3" "tangd/cache3"
-            port1=$(start_tang "tangd/cache1")
-            port2=$(start_tang "tangd/cache2")
-            port3=$(start_tang "tangd/cache3")
+            port1=$(start_tang_http "tangd/cache1")
+            port2=$(start_tang_http "tangd/cache2")
+            port3=$(start_tang_http "tangd/cache3")
         else
             rlRun "mkdir -p tangd/cache{1,2,3}"
             gen_tang_keys "tangd/cache1"
             gen_tang_keys "tangd/cache2"
             gen_tang_keys "tangd/cache3"
-            port1=$(start_tang "tangd/cache1")
-            port2=$(start_tang "tangd/cache2")
-            port3=$(start_tang "tangd/cache3")
+            port1=$(start_tang_http "tangd/cache1")
+            port2=$(start_tang_http "tangd/cache2")
+            port3=$(start_tang_http "tangd/cache3")
         fi
     rlPhaseEnd
 
@@ -151,9 +117,9 @@ rlJournalStart
     rlPhaseEnd
 
     rlPhaseStart FAIL "clevis decrypt, no servers available"
-        stop_tang "$port1"
-        stop_tang "$port2"
-        stop_tang "$port3"
+        rlRun "stop_tang_http '$port1'" 0 "Stop first Tang server"
+        rlRun "stop_tang_http '$port2'" 0 "Stop second Tang server"
+        rlRun "stop_tang_http '$port3'" 0 "Stop third Tang server"
         rlRun -s "clevis decrypt < enc > plain2" 1
         $checkTangURL && rlAssertGrep "http://localhost" $rlRun_LOG
         rm $rlRun_LOG
@@ -161,7 +127,7 @@ rlJournalStart
     rlPhaseEnd
 
     rlPhaseStart FAIL "clevis decrypt, one server available"
-        start_tang "tangd/cache1" "$port1"
+        port1=$(start_tang_http "tangd/cache1" "$port1")
         rlRun -s "clevis decrypt < enc > plain2" 1
         $checkTangURL && rlAssertGrep "http://localhost" $rlRun_LOG
         rm $rlRun_LOG
@@ -169,7 +135,7 @@ rlJournalStart
     rlPhaseEnd
 
     rlPhaseStart FAIL "clevis decrypt, two servers available"
-        start_tang "tangd/cache3" "$port3"
+        port3=$(start_tang_http "tangd/cache3" "$port3")
         rlRun -s "clevis decrypt < enc > plain2"
         $checkTangURL && rlAssertGrep "http://localhost" $rlRun_LOG
         rm $rlRun_LOG
@@ -177,9 +143,9 @@ rlJournalStart
     rlPhaseEnd
 
     rlPhaseStartCleanup
-        stop_tang "$port1"
-        #stop_tang "$port2"  # already down
-        stop_tang "$port3"
+        rlRun "stop_tang_http '$port1'" 0 "Stop first Tang server"
+        # Second Tang server was already stopped in the previous phase.
+        rlRun "stop_tang_http '$port3'" 0 "Stop third Tang server"
         rlRun "popd"
         rlRun "rm -r $TmpDir" 0 "Removing tmp directory"
     rlPhaseEnd
