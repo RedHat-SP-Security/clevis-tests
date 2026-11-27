@@ -1,0 +1,55 @@
+summary: Verify tang_pub in /rec response and binding storage semantics
+description: |
+    Verify the /rec/$kid endpoint returns tang_pub in its response, that the
+    returned key is correct and public-only, and that ECMR recovery semantics
+    are preserved. Also verify that new and regenerated bindings omit stored
+    Tang public keys (asserted on the JWE from LUKS2 token metadata), that
+    legacy-format bindings with a stored advertisement are migrated by
+    clevis luks regen, and that a tampered tang_pub returned in-flight is
+    never used by clevis decrypt (failing closed when no /adv fallback is
+    available).
+
+    The test skips with a clear message when the tang build does not return
+    tang_pub in /rec responses: it requires a tang build with tang_pub
+    support, so run it against PQC-capable hosts only (tag: tang-pub).
+
+    Phases:
+    1. /rec/$kid includes tang_pub — public-only, matches ECMR identifier
+    2. New bindings do not persist the Tang advertisement and unlock
+    3. Legacy-format binding (stored advertisement) is migrated by regen
+       and unlocks afterwards
+    4. Mismatched tang_pub is discarded by clevis; decrypt fails closed
+       when /adv is unavailable
+component:
+  - tang
+  - clevis
+  - jose
+test: ./runtest.sh
+require:
+  - clevis
+  - clevis-luks
+  - cryptsetup
+  - tang
+  - jose
+  - socat
+  - curl
+  - jq
+  - python3
+  - psmisc
+  - util-linux
+duration: 15m
+enabled: true
+tag:
+  - pqc
+  - tang-pub
+  - Tier2
+tier: '2'
+extra-summary: /CoreOS/clevis/Sanity/tang-pub-binding
+extra-task: /CoreOS/clevis/Sanity/tang-pub-binding
+adjust:
+  - enabled: false
+    when: distro < rhel-10
+    continue: false
+  - enabled: false
+    when: distro < fedora-45
+    continue: false
