@@ -48,23 +48,23 @@ jwk_is_public_only() {
         "JWK should not contain private members (d, priv, k)"
 }
 
-# luks_destroy can leave the loop device attached when a mapper is still
-# open (losetup -d fails, device busy). Close our mappers and retry the
-# detach, so the next luks_setup cannot overwrite the sole lodev variable
-# while a device from the previous phase is still attached — that would
-# leak the first device past cleanup.
+# Close any mapper a phase left open (a failed cryptsetup close), then
+# destroy the LUKS test disk. Kernel semantics note: since Linux 3.7,
+# losetup -d does not fail on a held device — it marks it autoclear and
+# the kernel reclaims it once the last holder closes. Closing the mappers
+# first therefore makes the release immediate and explicit rather than
+# deferred. luks_destroy also unlinks the loopfile, so no lookup by
+# backing path is possible (or needed) after it runs; the Cleanup-phase
+# fallback covers only the crashed-mid-phase case where luks_destroy
+# never executed.
 luks_destroy_checked() {
-    luks_destroy
     if [ -n "${MAPPER:-}" ] && cryptsetup status "${MAPPER}" >/dev/null 2>&1; then
-        rlRun "cryptsetup close \"\${MAPPER}\"" 0 "Closing mapper left open after luks_destroy"
+        rlRun "cryptsetup close \"\${MAPPER}\"" 0 "Closing mapper left open"
     fi
     if [ -n "${MAPPER_LEGACY:-}" ] && cryptsetup status "${MAPPER_LEGACY}" >/dev/null 2>&1; then
-        rlRun "cryptsetup close \"\${MAPPER_LEGACY}\"" 0 "Closing legacy mapper left open after luks_destroy"
+        rlRun "cryptsetup close \"\${MAPPER_LEGACY}\"" 0 "Closing legacy mapper left open"
     fi
-    local leftover
-    for leftover in $(losetup -l -j "${TmpDir}/loopfile" -O NAME --noheadings 2>/dev/null); do
-        rlRun "losetup -d \"\${leftover}\"" 0 "Retrying detach of \${leftover} after mapper close"
-    done
+    luks_destroy
 }
 
 PACKAGE="clevis"
@@ -125,22 +125,26 @@ rlJournalStart
         if [ "$PROBE_HTTP_CODE" = "200" ] \
             && jq -e '(.tang_pub | type) == "object"' probe_rec.json >/dev/null 2>&1; then
             rlPass "tang build returns tang_pub in /rec responses"
-        elif [ "$VERSION_HTTP_CODE" != "200" ]; then
-            # No /version endpoint at all — genuinely old tang (the rebase
-            # with tang_pub support has not landed in this build). This is
-            # the only legitimate skip: the fmf enables the test on
-            # rhel-10+/fedora-45+ only, where older tang builds may still
-            # be present in early composes.
-            rlLogWarning "tang build has no /version endpoint (HTTP $VERSION_HTTP_CODE) — old tang without tang_pub support"
+        elif [ "$VERSION_HTTP_CODE" = "404" ]; then
+            # 404 on /version — genuinely old tang (the rebase with tang_pub
+            # support has not landed in this build). The only legitimate
+            # skip: no released tang answers anything but 404 here with a
+            # working /rec. The fmf enables the test on rhel-10+/
+            # fedora-45+ only, where older tang builds may still be present
+            # in early composes.
+            rlLogWarning "tang build has no /version endpoint (HTTP 404) — old tang without tang_pub support"
             rlLogWarning "/rec probe returned HTTP $PROBE_HTTP_CODE; skipping the tang_pub phases"
             SKIP_TEST=true
         else
-            # /version is present but either does not advertise tang_pub or
-            # /rec does not deliver it. On the platforms this test targets
-            # tang_pub is mandatory, so both mean a regression — fail
-            # rather than shipping a green skip. SKIP_TEST keeps the output
-            # to one clear failure instead of cascading assertion errors.
-            rlFail "tang /version present but tang_pub not delivered (flag: $VERSION_TANG_PUB, /rec HTTP $PROBE_HTTP_CODE) — regression"
+            # Everything else is a failure on a platform where tang_pub is
+            # mandatory: /version answered with an error (e.g. HTTP 500
+            # from a broken key store), the connection failed (HTTP 000 —
+            # tangd dead behind the listener; rlWaitForSocket only proves
+            # socat is up), or the endpoint is present but tang_pub is not
+            # delivered. Fail rather than shipping a green skip with a
+            # misleading message. SKIP_TEST keeps the output to one clear
+            # failure instead of cascading assertion errors.
+            rlFail "tang_pub not delivered (/version HTTP $VERSION_HTTP_CODE, flag: $VERSION_TANG_PUB, /rec HTTP $PROBE_HTTP_CODE) — regression or service failure"
             SKIP_TEST=true
         fi
     rlPhaseEnd
@@ -246,8 +250,8 @@ rlJournalStart
     # The LUKS device is created (and destroyed afterwards) by the shared
     # luks_setup()/luks_destroy() helpers from utils.sh. They open their own
     # phases, so they must be called at journal top level, never inside
-    # another phase. luks_destroy_checked additionally closes stray
-    # mappers and retries the detach.
+    # another phase. luks_destroy_checked closes stray mappers before
+    # destroying the disk.
     luks_setup
 
     rlPhaseStartTest "Phase 2: New binding stores no advertisement and unlocks"
@@ -316,6 +320,14 @@ rlJournalStart
         rlRun "save_jwe_header regen_binding.jwe regen_hdr.json" 0 "Decode regenerated binding protected header"
         rlRun "jq -e '.clevis.tang.adv == null' regen_hdr.json" 0 "Regenerated binding no longer stores the advertisement"
         rlRun "jq -e '.clevis.tang.tang_pub == null' regen_hdr.json" 0 "Regenerated binding does not store tang_pub"
+        # regen re-binds from a url-only config with the advertisement
+        # trust prompt skipped, so a persistent MITM serving an
+        # attacker-signed advertisement could re-bind the slot to the
+        # attacker's key — and an unlock through the same MITM would pass
+        # every assertion above. Pin the kid exactly as Phase 2 does to
+        # catch the substitution.
+        rlRun "jq -e --arg kid \"\$exc_kid\" '.kid == \$kid' regen_hdr.json" 0 \
+            "Regenerated binding pins the ECMR key thumbprint (kid)"
 
         rlLog "Functional verification: unlock the regenerated binding"
         MAPPER_LEGACY="tangpub-p3-$$"
